@@ -110,6 +110,7 @@ DEVELOPMENT_DOMAINS = [
 GUARD_ASSETS = (
     (ASSETS / "extensions" / "pi-safety.ts", "extensions/pi-safety.ts", 0o644),
     (ASSETS / "extensions" / "pi-resilience.ts", "extensions/pi-resilience.ts", 0o644),
+    (ASSETS / "extensions" / "pi-image-budget.ts", "extensions/pi-image-budget.ts", 0o644),
     (ASSETS / "extensions" / "sandbox" / "index.ts", "extensions/sandbox/index.ts", 0o644),
     (ASSETS / "extensions" / "sandbox" / "sensitive-paths.ts", "extensions/sandbox/sensitive-paths.ts", 0o644),
     (ASSETS / "extensions" / "sandbox" / "package.json", "extensions/sandbox/package.json", 0o644),
@@ -529,6 +530,7 @@ def require_guard(agent_dir: Path) -> None:
         agent_dir / "bin" / "pi-child",
         agent_dir / "extensions" / "pi-safety.ts",
         agent_dir / "extensions" / "pi-resilience.ts",
+        agent_dir / "extensions" / "pi-image-budget.ts",
         agent_dir / "extensions" / "pi-safety.json",
         agent_dir / "extensions" / "sandbox.json",
         agent_dir / "extensions" / "sandbox" / "index.ts",

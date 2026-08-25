@@ -82,6 +82,9 @@ with a short changed brief or wait before trying again.
 It also sets `terminal.showImages` to `false`. Pi can still inspect image inputs,
 but protected sessions do not ask the terminal application to display arbitrary
 files. Re-enable terminal display only if the user wants that OS-level behavior.
+Protected launches also cap cumulative provider-bound image history at 16 MiB
+and four recent images. The extension replaces older image blocks with text in
+the outgoing context without changing the saved transcript or source files.
 Pi and its children can inspect PNG, JPEG, WebP, GIF, and BMP paths through the
 read tool. BMP is converted internally; convert it to PNG first if that step
 fails. Crop fine details before inspection. Pi does not attach video as video; extract
@@ -170,7 +173,8 @@ refuses differing assets; it is not an upgrade flag.
 
 For manual removal, remove only unchanged Ox Driver-owned files: `bin/pi-ox`,
 `bin/pi-child`, `extensions/pi-safety.ts`, `extensions/pi-safety.json`,
-`extensions/pi-resilience.ts`, `extensions/sandbox/`, `extensions/sandbox.json`,
+`extensions/pi-resilience.ts`, `extensions/pi-image-budget.ts`,
+`extensions/sandbox/`, `extensions/sandbox.json`,
 `agents/pi-agent.md`, `agents/pi-lead.md`, and the `team`, `solo`, `team-smoke`,
 and `team-acceptance` prompt files. Also remove
 `extensions/subagent/config.json` only when Ox Driver created it and it is still

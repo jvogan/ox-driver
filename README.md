@@ -82,7 +82,7 @@ Setup makes these user-level Pi changes:
 | Surface | Change |
 |---|---|
 | Model metadata | Adds the Ox reasoning map; does not change raw Pi's default model. |
-| Runtime behavior | Sets bounded retry, large-context compaction, and disables terminal-initiated image display. |
+| Runtime behavior | Sets bounded retry, large-context compaction, a 16 MiB outgoing image-history budget, and disables terminal-initiated image display. |
 | Fleet | Installs pi-subagents, two agent profiles, and four prompt templates when requested. |
 | Protected launch | Adds inert-by-default safety extensions plus `pi-ox` and `pi-child`; the policy activates only through those launchers. |
 
@@ -215,6 +215,10 @@ read tool to children. BMP is converted internally; convert it to PNG first if
 that step fails. Crop small details before inspection. Pi does not attach video as
 video; extract representative frames instead of using `@file` with a video or
 another binary.
+
+Protected launches retain up to four recent images within a 16 MiB encoded
+budget. Older images are replaced with a short placeholder in provider-bound
+context only. The saved Pi transcript and source image files remain unchanged.
 
 ## Drive the harness from another agent
 

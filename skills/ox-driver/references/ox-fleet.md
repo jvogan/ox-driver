@@ -87,6 +87,8 @@ The helper installs portable copies under the Pi agent directory:
 - `extensions/pi-resilience.ts`: converts two empty, zero-usage provider
   anomalies into transient errors so Pi's bounded retry policy applies: an
   empty successful stop and the bare error text `ERROR`.
+- `extensions/pi-image-budget.ts`: keeps cumulative provider-bound image
+  history within 16 MiB and four recent images without changing the transcript.
 - `extensions/pi-safety.json`: selects nonsensitive home scope for `power` and
   project scope for the conservative profiles.
 - `extensions/sandbox/`: Pi's bash sandbox, patched to preserve Pi's execution
@@ -296,6 +298,9 @@ Run in order and stop at the first mismatch:
     `CAPABILITY_BLOCKED`, followed by controller takeover and successful resume.
 13. Read a cropped image in both a root and child. Extract frames from a small
     video and inspect those frames; never pass video bytes through `@file`.
+14. Feed a mocked context more than 16 MiB of image history. Verify that the
+    provider view keeps the newest images within budget and the transcript hash
+    remains unchanged.
 
 A team can exceed ten model calls because tool results create turns. Disclose
 the topology and expected range first. Use explicit read-only wording; never

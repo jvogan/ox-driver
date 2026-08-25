@@ -34,6 +34,7 @@ def main() -> int:
     child = config / "bin" / "pi-child"
     safety = config / "extensions" / "pi-safety.ts"
     resilience = config / "extensions" / "pi-resilience.ts"
+    image_budget = config / "extensions" / "pi-image-budget.ts"
     sandbox = config / "extensions" / "sandbox" / "index.ts"
     sensitive_paths = config / "extensions" / "sandbox" / "sensitive-paths.ts"
     sandbox_config = config / "extensions" / "sandbox.json"
@@ -46,7 +47,7 @@ def main() -> int:
         / "sandbox-runtime"
     )
 
-    for path in (root, child, safety, resilience, sandbox, sensitive_paths, sandbox_config):
+    for path in (root, child, safety, resilience, image_budget, sandbox, sensitive_paths, sandbox_config):
         check(path.is_file() and not path.is_symlink(), f"missing or symlinked {path}")
     check(os.access(root, os.X_OK) and os.access(child, os.X_OK), "launchers are not executable")
     check(dependency.is_dir(), "sandbox dependency is missing")
@@ -57,6 +58,7 @@ def main() -> int:
     sandbox_text = sandbox.read_text(encoding="utf-8")
     launcher_text = root.read_text(encoding="utf-8")
     resilience_text = resilience.read_text(encoding="utf-8")
+    image_budget_text = image_budget.read_text(encoding="utf-8")
     for required in (
         'if (process.env.OX_DRIVER_GUARD_READY !== "1") return;',
         "nested agent runtimes are disabled",
@@ -101,6 +103,7 @@ def main() -> int:
     check('mktemp -d /tmp/ox-driver-runtime.XXXXXX' in launcher_text, "launcher does not create a private per-root temporary directory")
     check("cleanup_runtime_temp" in launcher_text, "launcher does not clean its private runtime temporary directory")
     check("pi-resilience.ts" in launcher_text, "bounded resilience extension is not loaded")
+    check("pi-image-budget.ts" in launcher_text, "aggregate image-budget extension is not loaded")
     check("existing child session target must be a regular owned file" in launcher_text, "existing child session type and owner validation is missing")
     check(
         'message.stopReason === "stop" && message.content.length === 0'
@@ -112,6 +115,14 @@ def main() -> int:
         "bare-error resilience guard is missing or too broad",
     )
     check("usage.input > 0" in resilience_text, "resilience guard does not require zero usage")
+    for required in (
+        'if (process.env.OX_DRIVER_GUARD_READY !== "1") return;',
+        'pi.on("context"',
+        "16 * 1024 * 1024",
+        "MAX_IMAGE_COUNT = 4",
+        "original image remains in Pi session history",
+    ):
+        check(required in image_budget_text, f"image-budget invariant missing: {required}")
 
     resilience_probe = f"""
 import resilience from {json.dumps(resilience.resolve().as_uri())};
@@ -139,6 +150,35 @@ if (await handler(event({{ usage: {{ ...usage, input: 1 }} }}))) process.exit(26
     check(
         resilience_result.returncode == 0,
         f"resilience behavior probe failed: {resilience_result.stderr.strip()}",
+    )
+
+    image_budget_probe = f"""
+import imageBudget, {{ applyImageBudget }} from {json.dumps(image_budget.resolve().as_uri())};
+const image = (length) => ({{ type: "image", data: "A".repeat(length), mimeType: "image/png" }});
+const original = [{{ role: "toolResult", toolCallId: "call-1", toolName: "read", details: {{ path: "frame.png" }}, content: [{{ type: "text", text: "before" }}, ...[1,2,3,4,5].map(() => image(1024))] }}];
+const snapshot = JSON.stringify(original);
+const result = applyImageBudget(original, 16 * 1024 * 1024, 4);
+if (!result.changed || result.retainedCount !== 4) process.exit(30);
+if (result.messages[0].content[1].type !== "text" || result.messages[0].content[5].type !== "image") process.exit(31);
+if (result.messages[0].toolCallId !== "call-1" || result.messages[0].details.path !== "frame.png") process.exit(32);
+if (JSON.stringify(original) !== snapshot) process.exit(33);
+const oversized = applyImageBudget([{{ role: "user", content: [image(20)] }}], 10, 4);
+if (oversized.retainedCount !== 0 || oversized.retainedBytes !== 0) process.exit(34);
+let handler;
+delete process.env.OX_DRIVER_GUARD_READY;
+imageBudget({{ on: (_name, value) => {{ handler = value; }} }});
+if (handler) process.exit(35);
+process.env.OX_DRIVER_GUARD_READY = "1";
+imageBudget({{ on: (name, value) => {{ if (name === "context") handler = value; }} }});
+if (!handler) process.exit(36);
+"""
+    image_budget_result = run(
+        ["node", "--experimental-strip-types", "--input-type=module", "-e", image_budget_probe],
+        config,
+    )
+    check(
+        image_budget_result.returncode == 0,
+        f"image-budget behavior probe failed: {image_budget_result.stderr.strip()}",
     )
 
     policy = json.loads(sandbox_config.read_text(encoding="utf-8"))

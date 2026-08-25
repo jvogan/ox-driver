@@ -216,16 +216,18 @@ def validate_guard_assets() -> None:
     wrapper = SKILL / "assets" / "bin" / "pi-guard"
     safety = SKILL / "assets" / "extensions" / "pi-safety.ts"
     resilience = SKILL / "assets" / "extensions" / "pi-resilience.ts"
+    image_budget = SKILL / "assets" / "extensions" / "pi-image-budget.ts"
     sandbox = SKILL / "assets" / "extensions" / "sandbox" / "index.ts"
     lock = SKILL / "assets" / "extensions" / "sandbox" / "package-lock.json"
     team = SKILL / "assets" / "prompts" / "team.md"
-    for path in (wrapper, safety, resilience, sandbox, lock, team):
+    for path in (wrapper, safety, resilience, image_budget, sandbox, lock, team):
         if not path.is_file():
             error(path, "missing guard asset")
             return
     wrapper_text = wrapper.read_text(encoding="utf-8")
     safety_text = safety.read_text(encoding="utf-8")
     resilience_text = resilience.read_text(encoding="utf-8")
+    image_budget_text = image_budget.read_text(encoding="utf-8")
     sandbox_text = sandbox.read_text(encoding="utf-8")
     team_text = team.read_text(encoding="utf-8")
     for token in (
@@ -257,6 +259,15 @@ def validate_guard_assets() -> None:
     ):
         if token not in resilience_text:
             error(resilience, f"missing bounded-retry invariant: {token}")
+    for token in (
+        'if (process.env.OX_DRIVER_GUARD_READY !== "1") return;',
+        'pi.on("context"',
+        "16 * 1024 * 1024",
+        "MAX_IMAGE_COUNT = 4",
+        "original image remains in Pi session history",
+    ):
+        if token not in image_budget_text:
+            error(image_budget, f"missing image-budget invariant: {token}")
     for token in ("env: bashEnv", "Required bash sandbox unavailable", "strictAllowlist"):
         if token not in sandbox_text:
             error(sandbox, f"missing sandbox invariant: {token}")

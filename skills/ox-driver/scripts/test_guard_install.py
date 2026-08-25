@@ -53,6 +53,7 @@ def fake_pi(root: Path) -> Path:
         "if os.environ.get('OX_DRIVER_GUARD_READY') != '1': sys.exit(21)\n"
         "if os.environ.get('HOME') == '/': sys.exit(25)\n"
         "if '/ox-driver-runtime.' not in os.environ.get('TMPDIR', ''): sys.exit(26)\n"
+        "if not any(arg.endswith('/extensions/pi-image-budget.ts') for arg in sys.argv): sys.exit(27)\n"
         "if os.environ.get('PI_SUBAGENT_CHILD') == '1':\n"
         "    if os.environ.get('PI_SUBAGENT_DEPTH') != '1': sys.exit(22)\n"
         "else:\n"

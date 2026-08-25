@@ -78,6 +78,10 @@ Recover at the nearest healthy layer:
 - If image calls continue to fail at the provider, the external controller may
   inspect the image with its approved vision tool and resume the same
   `--session-id` with a concise description.
+- A cumulative-image 413 means the session history is too large for the
+  provider. Restart Pi after installing the image-budget extension, then resume
+  the session. Do not repeat `continue` or `/compact` against the same unguarded
+  history.
 - Apply the same pattern when the controller has another required local
   capability. Do not silently change the provider, model, privacy terms, cost,
   or authorization boundary.

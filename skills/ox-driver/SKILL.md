@@ -8,7 +8,7 @@ description: >-
   dispatch, acceptance testing, and route migration.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # Ox Driver
@@ -112,6 +112,8 @@ backs up each changed file.
   topology ceiling, and verification command.
 - Close stdin on scripted calls with `< /dev/null`; reuse `--session-id` only
   when local transcript persistence is intended.
+- After an image-budget notice, use cropped images or a contact sheet instead
+  of rereading many full-size images.
 - In print or JSON mode, let guarded risky actions fail closed. Have the
   controller perform an authorized Git, deletion, publishing, deployment, or
   external mutation after it reviews the child report.

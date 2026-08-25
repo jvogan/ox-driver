@@ -184,6 +184,7 @@ class SetupTests(unittest.TestCase):
                 "prompts/team-smoke.md",
                 "prompts/team-acceptance.md",
                 "extensions/pi-safety.json",
+                "extensions/pi-image-budget.ts",
                 "extensions/subagent/config.json",
             ):
                 self.assertTrue((config / relative).is_file())

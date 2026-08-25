@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.1
+
+- Add a protected 16 MiB aggregate image-history budget for root and child
+  provider requests while preserving local transcripts.
+
 ## 1.0.0
 
 - Add the guarded `pi-ox` root and mandatory `pi-child` launcher.

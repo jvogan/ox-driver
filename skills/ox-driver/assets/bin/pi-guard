@@ -11,6 +11,7 @@ EXPECTED_MODEL="stealth/ox-alpha"
 EXPECTED_THINKING="max"
 SAFETY_EXTENSION="$AGENT_DIR/extensions/pi-safety.ts"
 RESILIENCE_EXTENSION="$AGENT_DIR/extensions/pi-resilience.ts"
+IMAGE_BUDGET_EXTENSION="$AGENT_DIR/extensions/pi-image-budget.ts"
 SANDBOX_EXTENSION="$AGENT_DIR/extensions/sandbox/index.ts"
 SANDBOX_POLICY="$AGENT_DIR/extensions/sandbox.json"
 SAFETY_POLICY="$AGENT_DIR/extensions/pi-safety.json"
@@ -57,6 +58,7 @@ require_runtime() {
   [[ -x "$REAL_PI" ]] || fail "real Pi executable is missing: $REAL_PI"
   [[ -f "$SAFETY_EXTENSION" ]] || fail "pi-safety extension is missing"
   [[ -f "$RESILIENCE_EXTENSION" ]] || fail "pi-resilience extension is missing"
+  [[ -f "$IMAGE_BUDGET_EXTENSION" ]] || fail "pi-image-budget extension is missing"
   [[ -f "$SANDBOX_EXTENSION" ]] || fail "sandbox extension is missing"
   [[ -f "$SANDBOX_POLICY" && ! -L "$SANDBOX_POLICY" ]] || fail "sandbox policy is missing or symlinked"
   [[ -f "$SAFETY_POLICY" && ! -L "$SAFETY_POLICY" ]] || fail "capability policy is missing or symlinked"
@@ -83,7 +85,7 @@ require_runtime() {
 }
 
 prepare_extensions() {
-  EXTENSION_ARGS=(--no-extensions -e "$SAFETY_EXTENSION" -e "$RESILIENCE_EXTENSION" -e "$SANDBOX_EXTENSION")
+  EXTENSION_ARGS=(--no-extensions -e "$SAFETY_EXTENSION" -e "$RESILIENCE_EXTENSION" -e "$IMAGE_BUDGET_EXTENSION" -e "$SANDBOX_EXTENSION")
   if [[ -f "$SUBAGENT_EXTENSION" && -f "$SUBAGENT_MANIFEST" ]]; then
     [[ ! -L "$AGENT_DIR/npm/node_modules/pi-subagents" &&
 	   -f "$SUBAGENT_LOCK" && -f "$SUBAGENT_CONFIG" && -f "$SUBAGENT_PROMPT_RUNTIME" && -f "$SUBAGENT_FANOUT_RUNTIME" &&
