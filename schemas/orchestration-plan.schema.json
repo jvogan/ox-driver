@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ox-driver.dev/schemas/orchestration-plan.schema.json",
+  "title": "Ox Driver orchestration plan",
+  "description": "Declares heterogeneous lanes validated before the first provider call.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "lanes"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "lanes": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/lane"
+      }
+    }
+  },
+  "$defs": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "\\S"
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "pattern": "\\S"
+    },
+    "absolutePath": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/text"
+        },
+        {
+          "pattern": "^(?:/|[A-Za-z]:[\\\\/])[^\\u0000]*$"
+        }
+      ]
+    },
+    "scopePath": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/text"
+        },
+        {
+          "pattern": "^(?![\\\\/])(?![A-Za-z]:[\\\\/])(?!\\.\\.(?:[\\\\/]|$))(?!.*[\\\\/]\\.\\.(?:[\\\\/]|$))[^\\u0000]+$"
+        }
+      ]
+    },
+    "lane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "role",
+        "objective",
+        "workerPath"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/name"
+        },
+        "role": {
+          "$ref": "#/$defs/name"
+        },
+        "objective": {
+          "$ref": "#/$defs/text"
+        },
+        "workerPath": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "harness": {
+          "enum": [
+            "opencode"
+          ]
+        },
+        "route": {
+          "$ref": "#/$defs/name"
+        },
+        "agent": {
+          "$ref": "#/$defs/name"
+        },
+        "childAgents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/name"
+          },
+          "uniqueItems": true
+        },
+        "ownedPaths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/scopePath"
+          },
+          "uniqueItems": true
+        },
+        "excludedPaths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/scopePath"
+          },
+          "uniqueItems": true
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/text"
+          },
+          "uniqueItems": true
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "costCeilingUsd": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

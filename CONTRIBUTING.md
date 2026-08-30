@@ -1,17 +1,20 @@
 # Contributing
 
 Skills live at `skills/<name>/SKILL.md` per the
-[Agent Skills spec](https://agentskills.io/specification).
+[Agent Skills spec](https://agentskills.io/specification). The public preview
+supports the OpenCode trusted-host lane on macOS and Linux.
 
-- Run `python3 scripts/validate.py`, `python3 scripts/test_install_reviewed_pi.py`, `python3 scripts/test_setup.py`,
-  `python3 scripts/test_guard_install.py`, `python3 scripts/verify_provenance.py`,
-  `agentskills validate skills/ox-driver`, ShellCheck, Gitleaks,
-  and `npm_config_registry=https://registry.npmjs.org npm_config_ignore_scripts=true npx --yes skills@1.5.23 add . --list`
-  before committing; CI runs them on every push and pull request.
-- Follow the working and documentation rules in [CLAUDE.md](CLAUDE.md);
-  they apply to human and agent contributors alike.
+- Run `npm ci --ignore-scripts` and `npm test` before committing. CI builds and
+  tests the supported contract on macOS and Linux.
+- Validate the skill with `agentskills validate skills/ox-driver` using
+  `skills-ref==0.1.1`.
+- Scan committed content with Gitleaks and confirm discovery with
+  `npm_config_ignore_scripts=true npx --yes skills@1.5.23 add . --list`.
+- Keep provider/model policy in route profiles. Do not commit credentials,
+  prompts, transcripts, private repository content, or machine-specific paths.
 - Keep each SKILL.md body under 500 lines. Tighten existing text before
   appending new text.
 - Verify flags and config keys against current tool docs; this repo tracks
   fast-moving software.
-- New skills need a README entry describing what they add.
+- New public capabilities need a README entry, fixture coverage, and a receipt
+  contract that survives process failure and recovery.

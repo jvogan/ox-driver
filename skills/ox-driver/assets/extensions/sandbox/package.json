@@ -1,8 +1,0 @@
-{
-  "name": "ox-driver-pi-sandbox",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "@anthropic-ai/sandbox-runtime": "0.0.73"
-  }
-}

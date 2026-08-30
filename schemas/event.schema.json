@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ox-driver.dev/schemas/event.schema.json",
+  "title": "Ox Driver run event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "sequence", "time", "runId", "adapterId", "type", "data"],
+  "properties": {
+    "version": { "const": 1 },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "time": { "type": "string", "format": "date-time" },
+    "runId": { "type": "string", "minLength": 1 },
+    "adapterId": { "type": "string", "minLength": 1 },
+    "type": { "type": "string", "minLength": 1 },
+    "data": { "type": "object" }
+  }
+}

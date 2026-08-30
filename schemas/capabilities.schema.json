@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ox-driver.dev/schemas/capabilities.schema.json",
+  "title": "Ox Driver harness capabilities",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "adapterId", "harness", "compatibility", "available", "capabilities", "notices"],
+  "properties": {
+    "version": { "const": 1 },
+    "adapterId": { "type": "string", "minLength": 1 },
+    "harness": { "type": "string", "minLength": 1 },
+    "compatibility": { "enum": ["verified", "compatible", "degraded", "blocked"] },
+    "available": { "type": "boolean" },
+    "executable": { "type": "string" },
+    "binarySha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "enforcementSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "harnessVersion": { "type": "string" },
+    "configuredRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model", "reasoning"],
+      "properties": {
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "reasoning": { "type": "string" }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "modelCalls", "contract", "artifact", "executionQualified"],
+      "properties": {
+        "version": { "const": 1 },
+        "modelCalls": { "const": 0 },
+        "contract": { "type": "string", "minLength": 1 },
+        "artifact": { "enum": ["verified", "drifted", "unverified"] },
+        "executionQualified": { "type": "boolean" },
+        "protocol": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "negotiatedVersion": { "type": "integer", "minimum": 1 },
+            "supportedVersions": {
+              "type": "array",
+              "items": { "type": "integer", "minimum": 1 },
+              "uniqueItems": true
+            }
+          }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    },
+    "notices": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

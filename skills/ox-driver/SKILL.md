@@ -1,134 +1,205 @@
 ---
 name: ox-driver
 description: >-
-  Launch and manage fleets of full-capability OpenRouter ox-alpha agents at max
-  reasoning through Pi. Use the harness directly in Pi or drive it from Claude
-  Code or Codex. Use for guided installation, direct or parallel agent work,
-  pi-agent/pi-lead orchestration, capability and network choices, headless
-  dispatch, acceptance testing, and route migration.
+  Delegate repository tasks from a host agent or terminal to OpenCode, then
+  inspect, repair, compare, and integrate the work through durable route,
+  cost, process, change, and acceptance receipts.
 license: MIT
 metadata:
-  version: "1.0.1"
+  version: "2.0.0-dev.0"
 ---
 
 # Ox Driver
 
-Set up Pi so a coding assistant can run Ox Alpha directly or manage several
-full-capability agents at max reasoning. Keep ordinary raw Pi available. Use
-`pi-ox` for protected model work and all team launches.
+Use Ox Driver when a host agent should supervise one or more OpenCode workers
+and retain receipts for the route, reported usage and cost, changed paths,
+process cleanup, and acceptance commands.
 
-## First-use interview
+Work from the extracted Ox Driver directory. Preserve the selected launcher,
+provider, model, reasoning effort, agent profile, scope, checks, timeout, and
+reported-cost target. A retry uses the recorded route-profile digest and fails
+if the profile changed. Create another profile with `--id` and select it with
+`--route`; keep profiles referenced by active or retryable runs unchanged.
 
-When the harness is not installed, inspect the existing Pi configuration before
-writing. First explain that the anonymous provider receives and retains the
-selected prompt, parent context, project instructions, skills, and tool results.
-The Ox page says those records are not used for training, while the governing
-Stealth EULA authorizes collection, sharing, retention, training, evaluation,
-and improvement. Require confirmation that the material is non-sensitive and
-the user has the rights and consents to submit it. Then ask the user to choose
-these two boundaries:
+Preserve the worker's model turns, reasoning, tools, child capacity, context,
+output, and wrap-up time. Add or lower a limit only when the user requests it
+or a controller policy requires it. Task, pair, and herd lanes default to 3,600
+seconds. Collect every independent lane result unless the user requests
+fail-fast.
 
-| Choice | Options |
-|---|---|
-| Child capability | `power` (recommended): full coding tools plus nonsensitive cross-folder access; `edit-only`: project-scoped file editing without bash; `review-only`: project-scoped reading without mutation or bash |
-| Sandboxed bash network | `open` (recommended): full web access; `development`: npm, PyPI, and GitHub; `custom`: user-approved domains; `none`: no shell network |
+## Set up a route
 
-Explain that all profiles keep Ox/max, inherited project instructions and skills,
-and supervisor access. Git, deletion, and external mutations are assigned to the
-controller by prompt policy and best-effort command matching; they are not a
-complete OS-level boundary.
-`power` permits nonsensitive native file-tool work across the home and temporary
-directories; guarded Bash stays workspace-scoped and writes only to the project
-and temporary directory. A fixed denylist blocks common credential paths but
-cannot classify content or cover every secret. The two conservative
-profiles keep file tools inside the project and mechanically remove bash or all
-mutation tools. The setup CLI keeps `--permission-profile` for compatibility.
+Install dependencies, build, and create one explicit route profile. The
+profile contains route identity and launcher settings; OpenCode continues to
+handle authentication.
 
-Pi leaves tool-approval policy to extensions. The guard prompts only for selected
-risky Bash actions in an interactive root. Print and JSON modes have no
-confirmation UI, so risky actions fail closed. Headless children report blocked
-work to the supervisor. Path and restricted-network violations always block. The
-conservative profiles mechanically narrow child tools.
+```bash
+npm ci --ignore-scripts
+npm run build
+node scripts/ox_route.mjs init-opencode \
+  --launcher opencode --provider openrouter \
+  --model z-ai/glm-5.3-flash --reasoning max
+node scripts/ox_route.mjs check
+npm exec -- ox-driver-opencode doctor
+```
 
-Routine reads, searches, writes, edits, commands, tests, and allowed network
-requests do not prompt in `power`. A denied cross-folder Bash read should be
-retried with a native file tool, not submitted for approval.
-Native `power` file tools may overwrite non-denylisted home files without a
-prompt. A broad native search is blocked when the target tree contains a known
-credential path; narrow the path, or use sandboxed Bash inside the project.
+Use provider, model, and reasoning values supported by the installed launcher.
+`check` validates the profile file. `doctor` checks the launcher and selected
+profile with zero model calls. Authentication and model availability are
+tested by the first task dispatch, which may incur provider cost.
 
-Explain that `open` makes research and ordinary development work without
-pre-enumerating sites, but shell commands can send project data anywhere.
-Restricted allowlists reduce destinations but do not prevent exfiltration to an
-allowed host.
+## Run one task
 
-Stop every active Pi root and child before installing, updating, rolling back,
-or removing extension assets. A running process retains loaded extension code.
-Preview with `scripts/setup.py --dry-run`. Never silently replace a conflicting
-profile, extension, wrapper, or settings shape.
-Pass `--acknowledge-stealth-terms` to the guard installer only after the user
-accepts the disclosure above. The protected launcher checks the recorded
-acknowledgement for plain, solo, team, and controller-driven runs.
+```bash
+npm exec -- ox-driver-opencode task /absolute/path/to/repository \
+  "Implement the requested change, verify it, and report what changed" \
+  --owned . --check "npm test"
+```
 
-Later changes use `--update-permission-profile` or `--update-network-profile`.
-Preview first. The updater accepts only recognized Ox Driver-owned assets and
-backs up each changed file.
+`task` creates a detached managed worktree and leaves it available for review.
+The terminal result links the task, worktree, and run receipts. Repeat
+`--owned`, `--exclude`, or `--check` for narrower change scopes and multiple
+verification commands. Use `--no-check` when the task has no executable check.
 
-## Route the work
+The managed worktree starts from `HEAD` unless you pass `--ref`. Uncommitted
+and ignored files from the source checkout are absent. Choose an acceptance
+command that works in a fresh worktree, or tell the worker to install the
+required dependencies.
 
-- Read [pi-setup.md](references/pi-setup.md) for Pi installation, authentication,
-  model configuration, supply-chain checks, privacy, rollback, and migration.
-- Read [ox-fleet.md](references/ox-fleet.md) for guard installation, child
-  capability profiles, pi-subagents, launch patterns, and acceptance tests.
-- Read [driving-from-outside.md](references/driving-from-outside.md) when Claude
-  Code, Codex, or another process controls Pi headlessly.
-- Use [versions.json](references/versions.json) before any install or upgrade.
+Allow native OpenCode delegation when the installed profiles support it:
 
-## Non-negotiable controls
+```bash
+npm exec -- ox-driver-opencode task /absolute/path/to/repository \
+  "Implement the change; delegate independent research where useful" \
+  --agent work --child-agent researcher \
+  --owned . --check "npm test"
+```
 
-1. Pin packages and verify their registry integrity. Never use the moving
-   `npx pi-subagents` installer.
-2. Install and test `pi-ox`, `pi-child`, `pi-safety`, and the bash sandbox before
-   installing full team profiles. Start protected work only through `pi-ox`.
-3. Keep `modelScope` strict with `allow: ["inherit"]`; use
-   `agentScope: "user"` for installed roles.
-4. Use one writer in a dirty checkout and managed worktrees for parallel writers.
-   The controller reviews diffs and performs approved Git or external mutations.
-5. State no-edit tasks exactly: "Read-only: do not edit, modify, write, or touch
-   files." Verify the report and working tree.
-6. Before a run likely to exceed ten model calls, disclose route, topology,
-   writers, worktrees, and expected range; obtain approval before launch.
+Ox Driver records the observed direct-child graph, route, turns, tools, tokens,
+and reported cost from OpenCode's structured output and metadata. Repeat
+`--child-agent` to allow additional reviewed child profiles.
 
-## Controller policy
+The one-writer profile policy rejects child profiles that declare direct
+write, edit, or patch tools. A shell-capable child may still change files. The
+receipt reconciles terminal Git state and does not attribute each path to a
+specific agent.
 
-- Plain prompt: let Pi work directly or use zero to several flat `pi-agent`
-  workers when a useful split exists.
-- `/team <task>`: request the depth-2 lead-and-agent hierarchy through direct
-  structured calls with `agentScope: "user"`; protected mode blocks
-  `workflowScript` because nested scripts can override discovery scope.
-- `/solo <task>`: instruct Pi not to delegate. Add `--exclude-tools subagent`
-  when the restriction must be mechanical.
-- Give every root and child a bounded objective, owned paths, exclusions,
-  topology ceiling, and verification command.
-- Close stdin on scripted calls with `< /dev/null`; reuse `--session-id` only
-  when local transcript persistence is intended.
-- After an image-budget notice, use cropped images or a contact sheet instead
-  of rereading many full-size images.
-- In print or JSON mode, let guarded risky actions fail closed. Have the
-  controller perform an authorized Git, deletion, publishing, deployment, or
-  external mutation after it reviews the child report.
-- For intentionally asynchronous waves, make bounded direct child calls with
-  `async: true`, then use `subagent_wait` once. Do not poll.
-- Treat a nonzero headless exit, failed child receipt, or missing final output as
-  incomplete. Inspect the error and files before accepting the run.
-- Follow the media and exhausted-retry recovery procedure in
-  [driving-from-outside.md](references/driving-from-outside.md).
+## Run a pair or herd
 
-## Completion gate
+Create one managed worktree for each writer, then run independent lanes:
 
-Run the offline tests, then `/team-smoke <question about a disposable,
-non-sensitive fixture>` as the minimum activation gate. Before writing-team use,
-run `/team-acceptance <disposable fixture
-and capability profile>` with explicit approval. Stop at the first mismatch. Use
-Pi's `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL` values as route evidence;
-do not trust model self-reports.
+```bash
+node scripts/ox_workspace.mjs create /absolute/path/to/repository
+node scripts/ox_pair.mjs "Implement two independent approaches" \
+  --worker /absolute/worktree-a --worker /absolute/worktree-b \
+  --role approach-a --role approach-b --check "npm test"
+```
+
+`ox_herd.mjs` accepts two to 32 repeated `--worker` paths and an optional
+`--concurrency` bound. Use `--lane-spec FILE` when lanes need distinct
+objectives, routes, agents, scopes, checks, timeouts, or cost expectations.
+Each lane runs in its own worktree. Integration requires an explicit selected
+apply operation.
+
+Inspect a finished orchestration and recover its child evidence:
+
+```bash
+node scripts/ox_orchestration.mjs inspect ID
+node scripts/ox_orchestration.mjs report ID
+node scripts/ox_orchestration.mjs archive ID --out /absolute/fresh-directory
+node scripts/ox_orchestration.mjs verify-archive /absolute/fresh-directory
+```
+
+## Repair one lane
+
+Retry an incomplete lane in its existing managed worktree:
+
+```bash
+node scripts/ox_orchestration.mjs retry ID --lane LANE_ID
+```
+
+For a herd, retry every incomplete lane while retaining completed siblings:
+
+```bash
+node scripts/ox_herd.mjs --retry-failed ID
+```
+
+Retry preserves the recorded route, agent, scope, checks, timeout, cost target,
+worktree, and prior failed-check context. Inspect the immutable attempt lineage
+in the new orchestration receipt.
+
+## Propose and integrate selected work
+
+Start with an evidence-only proposal:
+
+```bash
+node scripts/ox_integrate.mjs propose ID
+```
+
+The proposal reports each lane's patch source, diff statistics, file overlaps,
+conflicting lane IDs, and deterministic apply order. Export a whole patch or a
+selected path without changing a repository:
+
+```bash
+node scripts/ox_integrate.mjs export ID --lane LANE_ID --out lane.patch
+node scripts/ox_integrate.mjs export ID --lane LANE_ID --path src/api
+```
+
+Apply explicitly selected, non-conflicting lanes into a new disposable
+integration worktree and run controller-owned checks:
+
+```bash
+node scripts/ox_integrate.mjs apply ID \
+  --lane LANE_A --lane LANE_B \
+  --repo /absolute/path/to/repository --check "npm test"
+```
+
+The source working tree and refs stay unchanged. Ox Driver returns the
+integration worktree ID, applied patch digests, check results, and final status
+for host review.
+
+## Inspect, cancel, and clean up
+
+```bash
+node packages/opencode-cli/dist/main.js tail RUN_ID --events 40
+node packages/opencode-cli/dist/main.js inspect RUN_ID
+node packages/opencode-cli/dist/main.js cancel RUN_ID
+node packages/opencode-cli/dist/main.js recover RUN_ID
+node scripts/ox_orchestration.mjs list
+node scripts/ox_workspace.mjs list
+node scripts/ox_workspace.mjs remove WORKTREE_ID --discard
+```
+
+Inspect diffs before accepting writer changes. Use `recover` after an abrupt
+controller exit once the admitted process group has stopped. Use `--discard`
+only for a worktree the user intends to abandon; its output lists discarded
+paths.
+
+## Operating boundary
+
+OpenCode receives the filesystem and network access of the installed launcher
+process. A managed worktree separates Git changes; the launcher retains access
+to other host paths and credentials. Run Ox Driver only where the worker may
+use the available files, credentials, and network access.
+
+`--owned` and `--exclude` classify Git-visible changes after execution. They do
+not prevent reads or writes. A change outside the permitted scope fails receipt
+reconciliation.
+
+`--cost-ceiling` evaluates reported cost after execution. It cannot stop
+provider billing. Configure a provider-side or launcher-side limit when a run
+requires a hard spending cap.
+
+Ox Driver stores objectives, absolute paths, terminal output, events, receipts,
+check results, patches, orchestration records, and managed worktrees under the
+configured state roots. `OX_DRIVER_STATE_DIR`,
+`OX_DRIVER_ORCHESTRATION_STATE_DIR`, and `OX_DRIVER_WORKSPACE_STATE_DIR` select
+isolated roots. Other records remain until the operator removes the selected
+state directory according to their retention policy.
+
+Credentials belong in the launcher's authentication store. Keep them out of
+route profiles, specs, prompts, receipts, repositories, and documentation.
+
+Read [opencode-controller.md](references/opencode-controller.md)
+when building RunSpecs directly or diagnosing route, child-lineage,
+cancellation, and recovery behavior.

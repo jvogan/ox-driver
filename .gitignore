@@ -1,7 +1,6 @@
-.claude/
 .DS_Store
+node_modules/
+dist/
 __pycache__/
 *.pyc
-node_modules/
-out/
-.pi/subagents/
+.ox-driver-state/

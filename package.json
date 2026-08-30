@@ -1,0 +1,23 @@
+{
+  "name": "ox-driver-opencode-preview",
+  "version": "2.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.20.0"
+  },
+  "workspaces": [
+    "packages/core",
+    "packages/adapters/opencode",
+    "packages/opencode-cli"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "npm run build && node --test tests/controller/opencode-public-cli.test.mjs tests/controller/opencode-task-workflow.test.mjs tests/controller/opencode-profile-adapter.test.mjs tests/controller/ox-route-script.test.mjs tests/controller/orchestration-store.test.mjs tests/controller/orchestration-plan.test.mjs tests/controller/ox-pair-script.test.mjs tests/controller/ox-herd-script.test.mjs tests/controller/ox-orchestration-script.test.mjs tests/controller/orchestration-retry.test.mjs tests/controller/ox-integrate-script.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "typescript": "7.0.2"
+  }
+}

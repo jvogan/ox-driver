@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ox-driver.dev/schemas/route-profile.schema.json",
+  "title": "Ox Driver route profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id", "status", "harness", "tier", "launcher", "route", "pricingPolicy"],
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+    "status": { "enum": ["active", "candidate", "quarantined", "retired"] },
+    "harness": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+    "tier": { "enum": ["trusted-host", "attested"] },
+    "launcher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "versionArgs"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "versionArgs": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "type": "string", "maxLength": 1024 }
+        },
+        "doctor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["args"],
+          "properties": {
+            "args": {
+              "type": "array",
+              "maxItems": 16,
+              "items": { "type": "string", "maxLength": 1024 }
+            },
+            "requiredText": {
+              "type": "array",
+              "maxItems": 16,
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1, "maxLength": 4096 }
+            }
+          }
+        }
+      }
+    },
+    "route": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source"],
+          "properties": { "source": { "const": "launcher" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "provider", "model", "reasoning"],
+          "properties": {
+            "source": { "const": "explicit" },
+            "provider": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "model": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "reasoning": { "type": "string", "minLength": 1, "maxLength": 128 }
+          }
+        }
+      ]
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultProfile": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "allowedProfiles": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+        }
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
+        "reportOnlyCostUsdMicros": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+      }
+    },
+    "pricingPolicy": { "enum": ["report-only", "from-launcher", "zero-only"] },
+    "credentialPolicy": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "notice": { "type": "string", "minLength": 1, "maxLength": 4096 }
+  }
+}

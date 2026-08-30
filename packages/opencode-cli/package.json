@@ -1,0 +1,14 @@
+{
+  "name": "@ox-driver/opencode-cli",
+  "version": "2.0.0-dev.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "ox-driver": "bin/ox-driver.mjs",
+    "ox-driver-opencode": "bin/ox-driver.mjs"
+  },
+  "dependencies": {
+    "@ox-driver/adapter-opencode": "2.0.0-dev.0",
+    "@ox-driver/core": "2.0.0-dev.0"
+  }
+}

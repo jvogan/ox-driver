@@ -1,0 +1,343 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ox-driver.dev/schemas/receipt.schema.json",
+  "title": "Ox Driver run receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "tier", "runId", "adapterId", "harness", "status", "startedAt", "finishedAt", "acceptance", "harnessChangedPaths", "acceptanceChangedPaths", "changedPaths", "unownedChangedPaths", "eventsPath", "eventsSha256", "notices"],
+  "properties": {
+    "version": { "const": 1 },
+    "tier": { "enum": ["trusted-host", "attested"] },
+    "runId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^(?!\\.{1,2}$)[A-Za-z0-9._-]+$" },
+    "adapterId": { "$ref": "#/$defs/nonEmptyString" },
+    "harness": { "$ref": "#/$defs/nonEmptyString" },
+    "harnessVersion": { "$ref": "#/$defs/nonEmptyString" },
+    "harnessBinarySha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "harnessEnforcementSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "routeProfileSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "status": { "enum": ["completed", "failed", "blocked", "cancelled", "unknown"] },
+    "fallbackReceipt": { "type": "boolean" },
+    "failurePhase": { "enum": ["starting", "adapter-running", "adapter-finished", "reconciling", "acceptance-running", "finalizing", "terminal"] },
+    "workspaceEvidenceComplete": { "type": "boolean" },
+    "costReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "ceilingUsdMicros", "status"],
+      "properties": {
+        "mode": { "const": "report-only" },
+        "ceilingUsdMicros": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "observedUsdMicros": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "status": { "enum": ["within-ceiling", "exceeded", "partial", "unavailable"] }
+      }
+    },
+    "budgetLedger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "primaryPrincipalId", "providerRequests", "toolCalls", "childrenStarted", "reservedCostUsdMicros", "admissions", "deniedAdmissions"],
+      "properties": {
+        "version": { "const": 1 },
+        "primaryPrincipalId": { "const": "primary" },
+        "providerRequests": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "toolCalls": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "childrenStarted": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "reservedCostUsdMicros": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "admissions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["version", "id", "ordinal", "kind", "principalId"],
+            "properties": {
+              "version": { "const": 1 },
+              "id": { "$ref": "#/$defs/nonEmptyString" },
+              "ordinal": { "$ref": "#/$defs/positiveSafeInteger" },
+              "kind": { "enum": ["provider-request", "tool-call", "child-start"] },
+              "principalId": { "$ref": "#/$defs/nonEmptyString" },
+              "parentId": { "$ref": "#/$defs/nonEmptyString" },
+              "purpose": { "enum": ["primary", "child", "retry", "fallback", "auxiliary"] },
+              "toolName": { "$ref": "#/$defs/nonEmptyString" },
+              "requestedProfile": { "$ref": "#/$defs/nonEmptyString" },
+              "requestedRoute": { "$ref": "#/$defs/configuredRoute" },
+              "estimatedCostUsdMicros": { "$ref": "#/$defs/nonNegativeSafeInteger" }
+            }
+          }
+        },
+        "deniedAdmissions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["version", "ordinal", "kind", "principalId", "reason"],
+            "properties": {
+              "version": { "const": 1 },
+              "ordinal": { "$ref": "#/$defs/positiveSafeInteger" },
+              "kind": { "enum": ["provider-request", "tool-call", "child-start"] },
+              "principalId": { "$ref": "#/$defs/nonEmptyString" },
+              "reason": { "enum": ["unknown-principal", "duplicate-child", "topology", "child-policy", "route-policy", "purpose-order", "provider-request-limit", "tool-call-limit", "child-limit", "spend-estimate-required", "spend-limit", "invalid-input"] }
+            }
+          }
+        }
+      }
+    },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": "string", "format": "date-time" },
+    "requestedRouteProfile": { "$ref": "#/$defs/nonEmptyString" },
+    "configuredRoute": { "$ref": "#/$defs/configuredRoute" },
+    "agentIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestedProfile", "role"],
+      "properties": {
+        "requestedProfile": { "$ref": "#/$defs/nonEmptyString" },
+        "configuredProfile": { "$ref": "#/$defs/nonEmptyString" },
+        "observedProfile": { "$ref": "#/$defs/nonEmptyString" },
+        "runtimeObservation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status"],
+          "properties": {
+            "status": { "enum": ["observed", "unavailable"] },
+            "reason": { "$ref": "#/$defs/nonEmptyString" }
+          }
+        },
+        "role": { "const": "primary" }
+      },
+      "allOf": [
+        {
+          "anyOf": [
+            { "required": ["configuredProfile"] },
+            { "required": ["observedProfile"] }
+          ]
+        },
+        {
+          "if": {
+            "required": ["runtimeObservation"],
+            "properties": {
+              "runtimeObservation": {
+                "required": ["status"],
+                "properties": { "status": { "const": "observed" } }
+              }
+            }
+          },
+          "then": { "required": ["observedProfile"] }
+        },
+        {
+          "if": {
+            "required": ["runtimeObservation"],
+            "properties": {
+              "runtimeObservation": {
+                "required": ["status"],
+                "properties": { "status": { "const": "unavailable" } }
+              }
+            }
+          },
+          "then": { "not": { "required": ["observedProfile"] } }
+        }
+      ]
+    },
+    "effectivePower": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "route", "agent", "topology", "writerPolicy", "network", "timeoutSeconds", "limits"],
+      "properties": {
+        "version": { "const": 1 },
+        "route": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "requestedProfile": { "$ref": "#/$defs/nonEmptyString" },
+            "configured": { "$ref": "#/$defs/configuredRoute" },
+            "observed": { "$ref": "#/$defs/configuredRoute" }
+          }
+        },
+        "agent": {
+          "type": "object", "additionalProperties": false, "required": ["observation"],
+          "properties": {
+            "requestedProfile": { "$ref": "#/$defs/nonEmptyString" },
+            "configuredProfile": { "$ref": "#/$defs/nonEmptyString" },
+            "observedProfile": { "$ref": "#/$defs/nonEmptyString" },
+            "observation": { "enum": ["observed", "configured", "unobservable"] }
+          }
+        },
+        "topology": {
+          "type": "object", "additionalProperties": false, "required": ["requested", "observation"],
+          "properties": {
+            "requested": { "enum": ["solo", "flat", "hierarchical"] },
+            "childrenObserved": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+            "observation": { "enum": ["runtime-observed", "configured"] }
+          }
+        },
+        "writerPolicy": { "enum": ["read-only", "one-writer", "managed-worktrees"] },
+        "network": { "enum": ["configured", "open", "restricted", "none"] },
+        "timeoutSeconds": { "$ref": "#/$defs/positiveSafeInteger" },
+        "limits": {
+          "type": "object", "additionalProperties": false,
+          "required": ["providerRequests", "toolCalls", "children", "costUsdMicros", "turns", "context", "output"],
+          "properties": {
+            "providerRequests": { "$ref": "#/$defs/powerLimit" },
+            "toolCalls": { "$ref": "#/$defs/powerLimit" },
+            "children": { "$ref": "#/$defs/powerLimit" },
+            "costUsdMicros": { "$ref": "#/$defs/powerLimit" },
+            "turns": { "$ref": "#/$defs/powerLimit" },
+            "context": { "$ref": "#/$defs/powerLimit" },
+            "output": { "$ref": "#/$defs/powerLimit" }
+          }
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerRequests", "toolCalls", "childrenStarted", "complete", "sources"],
+      "properties": {
+        "providerRequests": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "toolCalls": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "childrenStarted": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "reportedCostUsdMicros": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "tokens": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["input", "output", "cacheRead", "cacheWrite", "total"],
+          "properties": {
+            "input": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+            "output": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+            "cacheRead": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+            "cacheWrite": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+            "reasoning": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+            "total": { "$ref": "#/$defs/nonNegativeSafeInteger" }
+          }
+        },
+        "complete": { "type": "boolean" },
+        "sources": {
+          "type": "array",
+          "items": { "enum": ["transport", "provider", "harness", "controller"] },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "principals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "role", "providerRequests", "toolCalls", "childrenStarted"],
+            "properties": {
+              "id": { "$ref": "#/$defs/nonEmptyString" },
+              "role": { "enum": ["primary", "child"] },
+              "parentId": { "$ref": "#/$defs/nonEmptyString" },
+              "requestedProfile": { "$ref": "#/$defs/nonEmptyString" },
+              "observedProfile": { "$ref": "#/$defs/nonEmptyString" },
+              "requestedRoute": { "$ref": "#/$defs/configuredRoute" },
+              "observedRoute": { "$ref": "#/$defs/configuredRoute" },
+              "providerRequests": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+              "toolCalls": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+              "childrenStarted": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+              "reportedCostUsdMicros": { "$ref": "#/$defs/nonNegativeSafeInteger" }
+            }
+          }
+        },
+        "terminationReason": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "exitCode": { "type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991 },
+    "finalOutput": { "type": "string" },
+    "acceptance": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "passed", "exitCode", "stdout", "stderr", "stdoutTruncated", "stderrTruncated", "backgroundProcessesDetected", "processTreeReaped", "terminationEscalated"],
+        "properties": {
+          "command": { "$ref": "#/$defs/nonEmptyString" },
+          "passed": { "type": "boolean" },
+          "durationMs": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+          "timedOut": { "type": "boolean" },
+          "exitCode": { "type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991 },
+          "stdout": { "type": "string" },
+          "stderr": { "type": "string" },
+          "stdoutTruncated": { "type": "boolean" },
+          "stderrTruncated": { "type": "boolean" },
+          "backgroundProcessesDetected": { "type": "boolean" },
+          "processTreeReaped": { "type": "boolean" },
+          "terminationEscalated": { "type": "boolean" }
+        }
+      }
+    },
+    "harnessChangedPaths": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" }, "uniqueItems": true },
+    "acceptanceChangedPaths": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" }, "uniqueItems": true },
+    "changedPaths": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" }, "uniqueItems": true },
+    "unownedChangedPaths": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" }, "uniqueItems": true },
+    "initialWorkspaceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "postAdapterWorkspaceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "finalWorkspaceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "patchPath": { "$ref": "#/$defs/nonEmptyString" },
+    "patchSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "patchBaseCommit": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+    "eventsPath": { "$ref": "#/$defs/nonEmptyString" },
+    "eventsSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "notices": { "type": "array", "items": { "type": "string" } }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["status"],
+        "properties": { "status": { "const": "completed" } }
+      },
+      "then": {
+        "required": ["configuredRoute", "finalOutput"],
+        "properties": {
+          "exitCode": { "const": 0 },
+          "finalOutput": { "type": "string", "pattern": "\\S" }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["fallbackReceipt"],
+        "properties": { "fallbackReceipt": { "const": true } }
+      },
+      "then": {
+        "required": ["failurePhase", "workspaceEvidenceComplete"],
+        "properties": {
+          "status": { "enum": ["failed", "blocked", "cancelled", "unknown"] },
+          "workspaceEvidenceComplete": { "const": false }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "nonNegativeSafeInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positiveSafeInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "configuredRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model", "reasoning"],
+      "properties": {
+        "provider": { "$ref": "#/$defs/nonEmptyString" },
+        "model": { "$ref": "#/$defs/nonEmptyString" },
+        "reasoning": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "powerLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "enforcement"],
+      "properties": {
+        "state": { "enum": ["explicit", "report-only", "unset", "unobservable"] },
+        "value": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "enforcement": { "enum": ["controller", "telemetry", "none", "unobservable"] }
+      }
+    }
+  }
+}

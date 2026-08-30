@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ox-driver.dev/schemas/run-spec.schema.json",
+  "title": "Ox Driver run specification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "tier", "harness", "task", "execution", "acceptance"],
+  "properties": {
+    "version": { "const": 1 },
+    "tier": { "enum": ["trusted-host", "attested"] },
+    "harness": {
+      "allOf": [
+        { "$ref": "#/$defs/nonEmptyString" },
+        { "not": { "pattern": "^\\s*(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee](?:-[Cc][Oo][Dd][Ee])?)\\s*$" } }
+      ]
+    },
+    "routeProfile": { "$ref": "#/$defs/nonEmptyString" },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective", "cwd", "ownedPaths", "excludedPaths"],
+      "properties": {
+        "objective": { "$ref": "#/$defs/nonEmptyString" },
+        "cwd": {
+          "allOf": [
+            { "$ref": "#/$defs/nonEmptyString" },
+            { "pattern": "^(?:/|[A-Za-z]:[\\\\/])" }
+          ]
+        },
+        "ownedPaths": { "type": "array", "items": { "$ref": "#/$defs/scopePath" }, "uniqueItems": true },
+        "excludedPaths": { "type": "array", "items": { "$ref": "#/$defs/scopePath" }, "uniqueItems": true },
+        "expectedWorkspaceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session", "topology", "writerPolicy", "network", "timeoutSeconds"],
+      "properties": {
+        "session": { "enum": ["ephemeral", "new", "resume", "fork"] },
+        "sessionId": { "$ref": "#/$defs/nonEmptyString" },
+        "agentProfile": { "$ref": "#/$defs/nonEmptyString" },
+        "topology": { "enum": ["solo", "flat", "hierarchical"] },
+        "writerPolicy": { "enum": ["read-only", "one-writer", "managed-worktrees"] },
+        "network": { "enum": ["configured", "open", "restricted", "none"] },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
+		"expectedRouteProfileSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "childPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allowedProfiles", "allowedRoutes"],
+          "properties": {
+            "allowedProfiles": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" }, "uniqueItems": true },
+            "allowedRoutes": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/configuredRoute" }
+            }
+          }
+        },
+        "maxProviderRequests": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "maxToolCalls": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "maxCostUsdMicros": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "reportOnlyCostUsdMicros": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "maxChildren": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "session": { "enum": ["resume", "fork"] } } },
+          "then": { "required": ["sessionId"] }
+        }
+      ]
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commands", "requireCleanUnownedPaths"],
+      "properties": {
+        "commands": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" }, "uniqueItems": true },
+        "requireCleanUnownedPaths": { "type": "boolean" },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 86400, "default": 120 },
+        "continueOnFailure": { "type": "boolean", "default": false }
+      }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "scopePath": {
+      "allOf": [
+        { "$ref": "#/$defs/nonEmptyString" },
+        { "pattern": "^(?![\\\\/])(?![A-Za-z]:[\\\\/])(?!\\.\\.(?:[\\\\/]|$))(?!.*[\\\\/]\\.\\.(?:[\\\\/]|$))[^\\u0000]+$" }
+      ]
+    },
+    "configuredRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model", "reasoning"],
+      "properties": {
+        "provider": { "$ref": "#/$defs/nonEmptyString" },
+        "model": { "$ref": "#/$defs/nonEmptyString" },
+        "reasoning": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    }
+  }
+}
