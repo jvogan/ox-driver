@@ -34,7 +34,7 @@ provider-side or launcher-side limit when a run requires a hard spending cap.
 
 ## Attested boundary
 
-OMP dispatch claims only the qualified solo read-only macOS arm64 route. Its
+OMP dispatch claims only a qualified read-only macOS arm64 route. Its
 route checks bind the launcher, runtime configuration, tool inventory, and
 process-containment mechanism. Writing, child agents, other operating systems,
 and other containment-mechanism digests remain unavailable.

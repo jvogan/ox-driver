@@ -39,7 +39,9 @@
         "role": { "$ref": "#/$defs/name" },
         "objective": { "$ref": "#/$defs/text" },
         "workerPath": { "$ref": "#/$defs/absolutePath" },
-        "harness": { "enum": ["opencode", "pi"] },
+        "harness": { "enum": ["opencode", "pi", "omp"] },
+        "writerPolicy": { "enum": ["read-only", "one-writer"] },
+        "dependsOn": { "type": "array", "items": { "$ref": "#/$defs/name" }, "uniqueItems": true },
         "route": { "$ref": "#/$defs/name" },
         "agent": { "$ref": "#/$defs/name" },
         "childAgents": { "type": "array", "items": { "$ref": "#/$defs/name" }, "uniqueItems": true },
@@ -48,7 +50,48 @@
         "checks": { "type": "array", "items": { "$ref": "#/$defs/text" }, "uniqueItems": true },
         "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
         "costCeilingUsd": { "type": "number", "minimum": 0 }
-      }
+      },
+      "allOf": [
+        {
+          "title": "read-only is available on Pi and OMP lanes",
+          "if": { "required": ["writerPolicy"], "properties": { "writerPolicy": { "const": "read-only" } } },
+          "then": { "required": ["harness"], "properties": { "harness": { "enum": ["pi", "omp"] } } }
+        },
+        {
+          "title": "a Pi writer lane declares at least one owned path",
+          "if": {
+            "required": ["harness", "writerPolicy"],
+            "properties": { "harness": { "const": "pi" }, "writerPolicy": { "const": "one-writer" } }
+          },
+          "then": { "required": ["ownedPaths"], "properties": { "ownedPaths": { "minItems": 1 } } }
+        },
+        {
+          "title": "a read-only lane owns no paths",
+          "if": {
+            "required": ["writerPolicy"],
+            "properties": { "writerPolicy": { "const": "read-only" } }
+          },
+          "then": { "properties": { "ownedPaths": { "maxItems": 0 } } }
+        },
+        {
+          "title": "read-only Pi lanes run no shell acceptance",
+          "if": {
+            "required": ["harness"],
+            "properties": { "harness": { "const": "pi" }, "writerPolicy": { "not": { "const": "one-writer" } } }
+          },
+          "then": { "properties": { "checks": { "maxItems": 0 } } }
+        },
+        {
+          "title": "child agents remain available only for OpenCode lanes",
+          "if": { "required": ["harness"], "properties": { "harness": { "enum": ["pi", "omp"] } } },
+          "then": { "properties": { "childAgents": { "maxItems": 0 } } }
+        },
+        {
+          "title": "OMP remains read-only",
+          "if": { "required": ["harness"], "properties": { "harness": { "const": "omp" } } },
+          "then": { "properties": { "writerPolicy": { "const": "read-only" }, "ownedPaths": { "maxItems": 0 } } }
+        }
+      ]
     }
   }
 }

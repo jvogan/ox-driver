@@ -3,6 +3,7 @@
   "references": [
     { "path": "packages/core" },
     { "path": "packages/adapters/probe-only" },
+    { "path": "packages/adapters/fake" },
     { "path": "packages/adapters/opencode" },
     { "path": "packages/adapters/pi" },
     { "path": "packages/adapters/omp" },

@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { isAbsolute, normalize, sep } from "node:path";
 
+import { laneTransitivelyDependsOn } from "./orchestration-plan.js";
+
 export const MAX_EFFECTIVE_RETRY_LANES = 32;
 const MAX_TEXT_BYTES = 16 * 1024;
 const MAX_OBJECTIVE_BYTES = 1024 * 1024;
@@ -14,7 +16,9 @@ export interface EffectiveRetryLane {
 	role: string;
 	objective: string;
 	workerPath: string;
-	harness?: "opencode" | "pi";
+	harness?: "opencode" | "pi" | "omp";
+	writerPolicy?: "read-only" | "one-writer";
+	dependsOn?: readonly string[];
 	route: string;
 	agent?: string;
 	childAgents?: readonly string[];
@@ -81,12 +85,18 @@ function nameList(value: unknown, label: string): readonly string[] {
 function lane(value: unknown, index: number): EffectiveRetryLane {
 	const input = record(value, `effective retry lane ${index}`);
 	exactKeys(input, [
-		"id", "role", "objective", "workerPath", "harness", "route", "agent", "childAgents", "profileDirectory",
+		"id", "role", "objective", "workerPath", "harness", "writerPolicy", "dependsOn", "route", "agent", "childAgents", "profileDirectory",
 		"ownedPaths", "excludedPaths", "checks", "timeoutSeconds", "reportOnlyCostUsdMicros",
 		"worktreeId", "baseCommit",
 	], `effective retry lane ${index}`);
-	if (input.harness !== undefined && input.harness !== "opencode" && input.harness !== "pi") {
-		throw new Error(`effective retry lane ${index} harness must be "opencode" or "pi"`);
+	if (input.harness !== undefined && input.harness !== "opencode" && input.harness !== "pi" && input.harness !== "omp") {
+		throw new Error(`effective retry lane ${index} harness must be "opencode", "pi", or "omp"`);
+	}
+	if (input.writerPolicy !== undefined && input.writerPolicy !== "read-only" && input.writerPolicy !== "one-writer") {
+		throw new Error(`effective retry lane ${index} writerPolicy must be "read-only" or "one-writer"`);
+	}
+	if (input.writerPolicy === "one-writer" && (!Array.isArray(input.ownedPaths) || input.ownedPaths.length === 0)) {
+		throw new Error(`effective retry lane ${index} writerPolicy "one-writer" requires at least one owned path`);
 	}
 	const timeoutSeconds = input.timeoutSeconds;
 	if (!Number.isSafeInteger(timeoutSeconds) || Number(timeoutSeconds) < 1 || Number(timeoutSeconds) > 86_400) {
@@ -107,7 +117,9 @@ function lane(value: unknown, index: number): EffectiveRetryLane {
 		workerPath: absolutePath(input.workerPath, `effective retry lane ${index} workerPath`),
 		// Serialized keys stay provided-only, so a lane without harness hashes
 		// byte-identically to plans recorded before this field existed.
-		...(input.harness === undefined ? {} : { harness: input.harness as "opencode" | "pi" }),
+		...(input.harness === undefined ? {} : { harness: input.harness as "opencode" | "pi" | "omp" }),
+		...(input.writerPolicy === undefined ? {} : { writerPolicy: input.writerPolicy as "read-only" | "one-writer" }),
+		...(input.dependsOn === undefined ? {} : { dependsOn: nameList(input.dependsOn, `effective retry lane ${index} dependsOn`) }),
 		route: string(input.route, `effective retry lane ${index} route`, MAX_NAME_BYTES),
 		...(input.agent === undefined ? {} : { agent: string(input.agent, `effective retry lane ${index} agent`, MAX_NAME_BYTES) }),
 		...(input.childAgents === undefined ? {} : { childAgents: nameList(input.childAgents, `effective retry lane ${index} childAgents`) }),
@@ -130,9 +142,25 @@ export function validateEffectiveRetryPlan(value: unknown): EffectiveRetryPlan {
 		throw new Error(`effective retry plan must contain from 1 to ${MAX_EFFECTIVE_RETRY_LANES} lanes`);
 	}
 	const lanes = input.lanes.map(lane);
-	for (const field of ["id", "role", "workerPath"] as const) {
+	for (const field of ["id", "role"] as const) {
 		const values = lanes.map((item) => item[field]);
 		if (new Set(values).size !== values.length) throw new Error(`effective retry plan lane ${field} values must be unique`);
+	}
+	const ids = new Set(lanes.map((item) => item.id));
+	for (const lane of lanes) for (const dependency of lane.dependsOn ?? []) {
+		if (dependency === lane.id) throw new Error(`effective retry lane ${lane.id} must not depend on itself`);
+		if (!ids.has(dependency)) throw new Error(`effective retry lane ${lane.id} references unknown dependency ${dependency}`);
+	}
+	for (const lane of lanes) if (laneTransitivelyDependsOn(lanes, lane.id, lane.id)) {
+		throw new Error(`effective retry plan contains a dependency cycle through ${lane.id}`);
+	}
+	for (const [index, lane] of lanes.entries()) for (let otherIndex = 0; otherIndex < index; otherIndex += 1) {
+		const other = lanes[otherIndex]!;
+		if (lane.workerPath !== other.workerPath) continue;
+		if (!laneTransitivelyDependsOn(lanes, lane.id, other.id)
+			&& !laneTransitivelyDependsOn(lanes, other.id, lane.id)) {
+			throw new Error(`effective retry lanes ${other.id} and ${lane.id} share an unordered worker path`);
+		}
 	}
 	return Object.freeze({ version: 1 as const, lanes: Object.freeze(lanes) });
 }

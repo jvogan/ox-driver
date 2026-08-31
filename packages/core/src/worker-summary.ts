@@ -171,6 +171,9 @@ export function compactWorkerReceipt(value: unknown, workerPath: string, role: s
 	for (const field of ["requestedRouteProfile", "routeProfileSha256"] as const) {
 		if (typeof receipt[field] === "string") summary[field] = receipt[field];
 	}
+	for (const field of ["initialWorkspaceSha256", "postAdapterWorkspaceSha256", "finalWorkspaceSha256"] as const) {
+		if (typeof receipt[field] === "string" && /^[0-9a-f]{64}$/.test(receipt[field] as string)) summary[field] = receipt[field];
+	}
 	for (const field of ["configuredRoute", "agentIdentity", "effectivePower"] as const) {
 		const evidence = record(receipt[field]);
 		if (evidence) summary[field] = evidence;

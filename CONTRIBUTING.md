@@ -12,21 +12,47 @@ npm run build
 npm test
 ```
 
-The test suite makes no model request. Add fixture coverage for each changed
-admission, rejection, receipt, cancellation, or recovery path.
+The test suite makes no model request. It runs the shipped scripts and CLIs as
+child processes against fixture launchers, temporary state directories, and
+throwaway Git repositories.
+
+Add fixture coverage for each changed admission, rejection, receipt,
+cancellation, or recovery path. Every shipped command already has a test that
+executes it. Extend the matching test:
+
+| Command surface | Test |
+|---|---|
+| `scripts/ox_route.mjs` | `tests/controller/ox-route-script.test.mjs` |
+| `scripts/ox_opencode.mjs` | `tests/controller/ox-opencode-script.test.mjs` |
+| `scripts/ox_pi.mjs` | `tests/controller/ox-pi-script.test.mjs` |
+| `scripts/ox_omp.mjs` | `tests/controller/ox-omp-script.test.mjs` |
+| `scripts/ox_workspace.mjs` | `tests/controller/managed-worktrees.test.mjs` |
+| `scripts/ox_pair.mjs` | `tests/controller/ox-pair-script.test.mjs` |
+| `scripts/ox_herd.mjs` | `tests/controller/ox-herd-script.test.mjs` |
+| `scripts/ox_team.mjs` | `tests/controller/ox-team-script.test.mjs` |
+| `scripts/ox_orchestration.mjs` | `tests/controller/ox-orchestration-script.test.mjs` |
+| `scripts/orchestration-retry.mjs` | `tests/controller/orchestration-retry.test.mjs` |
+| `scripts/ox_integrate.mjs` | `tests/controller/ox-integrate-script.test.mjs` |
+| `packages/opencode-cli` | `tests/controller/opencode-public-cli.test.mjs` |
+| `packages/cli` runtime | `tests/controller/cli-runtime.test.mjs` |
+
+Add or update a direct CLI parsing test when changing
+`packages/cli/src/main.ts`.
 
 ## Preserve the capability contract
 
 - OpenCode supports one-writer tasks, receipt-aware direct children, pairs,
-  herds, retries, and explicit integration.
-- Pi supports solo one-writer tasks and solo read-only review.
-- OMP supports attested solo read-only review on the qualified macOS arm64
-  route.
+  team lanes, dependencies, retries, and explicit integration.
+- Pi supports one-writer tasks and read-only review as solo runs or team lanes.
+  Integration accepts Pi writer patches from orchestration receipts.
+- OMP supports attested read-only review as a solo run or team lane on a
+  qualified macOS arm64 route.
+- Teams may use any combination of OpenCode, Pi, and OMP lanes.
 - ACP and DeepSeek Harness support inspection only and reject task dispatch.
 
-Do not claim Pi children or teams, OMP writing or children, ACP dispatch, or
-DeepSeek Harness dispatch. Add executable coverage before expanding a
-capability claim.
+Do not claim Ox-managed Pi child profiles, OMP writing or children, ACP
+dispatch, or DeepSeek Harness dispatch. Add executable coverage before
+expanding a capability claim.
 
 ## Keep route policy explicit
 

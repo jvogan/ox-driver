@@ -6,10 +6,14 @@ import { fileURLToPath } from "node:url";
 
 import { createWorkerSupervisor, discoverWorkerIdentity, resolveRunnerIdentity, runWorker } from "./ox_pair.mjs";
 import { retryOrchestration } from "./orchestration-retry.mjs";
-import { OX_DRIVER_SUPPORTS_PI_LANES } from "./distribution.mjs";
+import { configuredLaneRunners } from "./lane-runners.mjs";
+import { OX_DRIVER_SUPPORTS_OMP_LANES, OX_DRIVER_SUPPORTS_PI_LANES } from "./distribution.mjs";
 import {
 	effectiveRetryPlanSha256,
+	laneTransitivelyDependsOn,
+	laneWriterPolicy,
 	MICROS_PER_USD,
+	orchestrationHarnessCapabilities,
 	summarizeOrchestrationCosts,
 	validateEffectiveRetryPlan,
 	validateOrchestrationPlan,
@@ -17,9 +21,7 @@ import {
 import { OrchestrationReceiptStore } from "../packages/core/dist/orchestration-store.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const DEFAULT_RUNNER = resolve(ROOT, "scripts", "ox_opencode.mjs");
-const DEFAULT_PI_RUNNER = resolve(ROOT, "scripts", "ox_pi.mjs");
-const PRIVATE_CONTROLLER_CLI = resolve(ROOT, "packages", "cli", "dist", "main.js");
+const CONTROLLER_CLI = resolve(ROOT, "packages", "cli", "dist", "main.js");
 const MAX_WORKERS = 32;
 
 function fail(message) {
@@ -145,6 +147,7 @@ async function loadPlan(options) {
 				role: roles[index],
 				objective: options.objective,
 				workerPath,
+				harness: "opencode",
 				...(options.route ? { route: options.route } : {}),
 				...(options.agent ? { agent: options.agent } : {}),
 				...(options.childAgents.length > 0 ? { childAgents: options.childAgents } : {}),
@@ -161,7 +164,10 @@ async function loadPlan(options) {
 	} catch (error) {
 		fail(`--lane-spec must contain readable JSON: ${error instanceof Error ? error.message : String(error)}`);
 	}
-	return validateOrchestrationPlan(document);
+	const plan = validateOrchestrationPlan(document);
+	const lane = plan.lanes.find((candidate) => candidate.harness === undefined);
+	if (lane) fail(`lane ${lane.id} must declare a harness; the lane plan has no default harness`);
+	return plan;
 }
 
 function runtimeLanes(plan, options) {
@@ -174,6 +180,8 @@ function runtimeLanes(plan, options) {
 	let sharedIndex = 0;
 	const lanes = plan.lanes.map((lane) => {
 		const harness = lane.harness ?? "opencode";
+		const capabilities = orchestrationHarnessCapabilities(harness);
+		const writerPolicy = laneWriterPolicy(lane);
 		if (harness === "pi") {
 			if (lane.agent !== undefined) fail(`lane ${lane.id} uses Pi and cannot select an OpenCode agent profile`);
 			if ((lane.childAgents?.length ?? 0) > 0) fail(`lane ${lane.id} uses Pi and cannot select OpenCode child agents`);
@@ -188,40 +196,141 @@ function runtimeLanes(plan, options) {
 			objective: lane.objective,
 			workerPath: lane.workerPath,
 			harness,
+			writerPolicy,
+			dependsOn: [...(lane.dependsOn ?? [])],
 			route: lane.route,
 			agent: lane.agent,
 			childAgents: [...(lane.childAgents ?? [])],
-			ownedPaths: harness === "pi" ? [] : lane.ownedPaths ? [...lane.ownedPaths] : ["."],
+			// A read-only lane owns nothing. Every writer owns declared paths; a
+			// Pi writer must name them, so plan validation already rejected an
+			// empty list before allocation.
+			ownedPaths: writerPolicy === "read-only" ? [] : lane.ownedPaths ? [...lane.ownedPaths] : ["."],
 			excludedPaths: [...new Set([".env", ".git", ...(lane.excludedPaths ?? [])])],
-			// Read-only Pi lanes never execute shell acceptance commands. Shared
-			// checks apply only to writer lanes; an explicit Pi check is rejected
-			// by plan validation before allocation.
-			checks: harness === "pi" ? [] : [...(lane.checks ?? []), ...options.checks],
+			// A harness declares whether controller-owned checks are compatible
+			// with its read-only lane. Pi review stays shell-free; OMP may verify
+			// the admitted snapshot after its review completes.
+			checks: writerPolicy === "read-only" && !capabilities.readOnlyChecks
+				? []
+				: [...(lane.checks ?? []), ...options.checks],
 			timeoutSeconds: lane.timeoutSeconds ?? options.timeoutSeconds,
 			ceilingUsdMicros,
 		};
 	});
 	if (!options.noCheck) {
-		// A read-only Pi review lane produces a report, not a change, so it may
-		// run without a check while writer lanes still require one.
-		const lane = lanes.find((item) => item.checks.length === 0 && item.harness !== "pi");
+		// A read-only review lane produces a report, not a change, so it may run
+		// without a check while every writer lane still requires one.
+		const lane = lanes.find((item) => item.checks.length === 0 && item.writerPolicy !== "read-only");
 		if (lane) fail(`lane ${lane.id} requires at least one plan check, one shared --check, or explicit --no-check`);
 	}
 	return lanes;
 }
 
-async function boundedMap(items, concurrency, callback) {
-	const results = new Array(items.length);
-	let next = 0;
-	async function worker() {
-		while (true) {
-			const index = next;
-			next += 1;
-			if (index >= items.length) return;
-			results[index] = await callback(items[index], index);
+// A lane must not quietly come back weaker than it was dispatched. The run
+// receipt records the writer policy the adapter actually enforced, so a lane
+// that asked for a writer and returned a read-only receipt fails here instead
+// of being reported as a completed writer.
+function reconcileLaneWriterPolicy(lane, result) {
+	const observed = result.effectivePower?.writerPolicy;
+	if (result.status !== "completed" || observed === undefined || observed === lane.writerPolicy) return result;
+	return {
+		...result,
+		status: "failed",
+		controllerError: `lane ${lane.id} was dispatched with writer policy ${lane.writerPolicy} and returned a ${observed} receipt`,
+		observedWriterPolicy: observed,
+		expectedWriterPolicy: lane.writerPolicy,
+	};
+}
+
+function boundedText(value, maximumBytes) {
+	const bytes = Buffer.from(value, "utf8");
+	if (bytes.length <= maximumBytes) return value;
+	let end = maximumBytes;
+	while (end > 0 && (bytes[end] & 0xc0) === 0x80) end -= 1;
+	return `${bytes.subarray(0, end).toString("utf8")}\n[truncated by Ox Driver]`;
+}
+
+function dependencyObjective(lane, resultsById) {
+	if (lane.dependsOn.length === 0) return lane.objective;
+	const inputs = lane.dependsOn.map((id) => {
+		const result = resultsById.get(id);
+		return {
+			laneId: id,
+			role: result?.role,
+			harness: result?.harness,
+			status: result?.status,
+			runId: result?.runId,
+			changedPaths: result?.changedPaths ?? [],
+			finalWorkspaceSha256: result?.finalWorkspaceSha256,
+			output: boundedText(String(result?.finalOutputPreview ?? ""), 8 * 1024),
+		};
+	});
+	return `${lane.objective}\n\n# Ox team inputs\nThe following completed dependency records are controller-supplied. Use them as prior work for this stage.\n${boundedText(JSON.stringify(inputs, null, 2), 32 * 1024)}`;
+}
+
+function expectedDependencyWorkspace(lane, resultsById) {
+	const digests = lane.dependsOn.flatMap((id) => {
+		const result = resultsById.get(id);
+		return result?.workerPath === lane.workerPath && typeof result.finalWorkspaceSha256 === "string"
+			? [result.finalWorkspaceSha256]
+			: [];
+	});
+	if (digests.length === 0) return undefined;
+	const unique = [...new Set(digests)];
+	if (unique.length !== 1) fail(`lane ${lane.id} received conflicting terminal workspace digests from its dependencies`);
+	return unique[0];
+}
+
+function blockedLane(lane, failedDependencies) {
+	return {
+		laneId: lane.id,
+		role: lane.role,
+		workerPath: lane.workerPath,
+		expectedHarness: lane.harness,
+		harness: lane.harness,
+		status: "blocked",
+		controllerError: `lane ${lane.id} was not started because dependencies did not complete: ${failedDependencies.join(", ")}`,
+		dependsOn: lane.dependsOn,
+		changedPaths: [],
+		unownedChangedPaths: [],
+		acceptance: [],
+	};
+}
+
+async function runDependencyPlan(lanes, concurrency, callback) {
+	const results = new Array(lanes.length);
+	const resultsById = new Map();
+	const pending = new Set(lanes.map((_lane, index) => index));
+	const active = new Map();
+	while (pending.size > 0 || active.size > 0) {
+		let changed = false;
+		for (const index of [...pending]) {
+			const lane = lanes[index];
+			const dependencyResults = lane.dependsOn.map((id) => resultsById.get(id));
+			if (dependencyResults.some((result) => result === undefined)) continue;
+			const failed = dependencyResults.filter((result) => result.status !== "completed").map((result) => result.laneId);
+			if (failed.length > 0) {
+				const result = blockedLane(lane, failed);
+				results[index] = result;
+				resultsById.set(lane.id, result);
+				pending.delete(index);
+				changed = true;
+				continue;
+			}
+			if (active.size >= concurrency) break;
+			pending.delete(index);
+			const promise = Promise.resolve(callback(lane, index, resultsById)).then((result) => ({ index, result }));
+			active.set(index, promise);
+			changed = true;
 		}
+		if (active.size === 0) {
+			if (pending.size > 0 && !changed) fail("team scheduler found no runnable lane; dependency validation did not produce an acyclic plan");
+			continue;
+		}
+		const completed = await Promise.race(active.values());
+		active.delete(completed.index);
+		results[completed.index] = completed.result;
+		resultsById.set(lanes[completed.index].id, completed.result);
 	}
-	await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
 	return results;
 }
 
@@ -243,7 +352,7 @@ async function main() {
 			failed: true,
 			instruction,
 			concurrency,
-			runner: process.env.OX_DRIVER_RETRY_RUNNER?.trim() || process.env.OX_DRIVER_HERD_RUNNER?.trim() || DEFAULT_RUNNER,
+			runner: process.env.OX_DRIVER_RETRY_RUNNER?.trim() || process.env.OX_DRIVER_HERD_RUNNER?.trim() || undefined,
 		});
 		process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
 		if (receipt.status !== "completed") process.exitCode = 1;
@@ -259,31 +368,36 @@ async function main() {
 	process.on("SIGINT", onSignal);
 	process.on("SIGTERM", onSignal);
 	const options = parse(process.argv.slice(2));
-	const requestedRunner = process.env.OX_DRIVER_HERD_RUNNER?.trim() || DEFAULT_RUNNER;
-	if (!isAbsolute(requestedRunner)) fail("OX_DRIVER_HERD_RUNNER must be an absolute path");
-	const requestedPiRunner = process.env.OX_DRIVER_PI_LANE_RUNNER?.trim() || DEFAULT_PI_RUNNER;
-	if (!isAbsolute(requestedPiRunner)) fail("OX_DRIVER_PI_LANE_RUNNER must be an absolute path");
 	const plan = await loadPlan(options);
 	const lanes = runtimeLanes(plan, options);
-	if (lanes.some((lane) => lane.harness === "pi")) {
-		if (!OX_DRIVER_SUPPORTS_PI_LANES) fail("this OpenCode-only distribution cannot dispatch or retry Pi lanes");
-		try {
-			await Promise.all([access(requestedPiRunner), access(PRIVATE_CONTROLLER_CLI)]);
-		} catch {
-			fail("Pi lane support is unavailable in this installation");
-		}
+	const harnesses = [...new Set(lanes.map((lane) => lane.harness))];
+	if (harnesses.includes("pi") && !OX_DRIVER_SUPPORTS_PI_LANES) fail("this distribution does not include Pi lane support");
+	if (harnesses.includes("omp") && !OX_DRIVER_SUPPORTS_OMP_LANES) fail("this distribution does not include OMP lane support");
+	const runnerConfigurations = configuredLaneRunners(harnesses);
+	try {
+		await Promise.all([...runnerConfigurations.map((runner) => access(runner.path)), access(CONTROLLER_CLI)]);
+	} catch {
+		fail("one or more selected lane runners are unavailable in this installation");
 	}
-	const runnerIdentity = await resolveRunnerIdentity(requestedRunner, process.env.OX_DRIVER_HERD_RUNNER?.trim() ? "environment-override" : "bundled");
-	const piRunnerIdentity = lanes.some((lane) => lane.harness === "pi")
-		? await resolveRunnerIdentity(requestedPiRunner, process.env.OX_DRIVER_PI_LANE_RUNNER?.trim() ? "environment-override" : "bundled")
-		: undefined;
-	const runner = runnerIdentity.path;
-	const piRunner = piRunnerIdentity?.path;
+	const runnerRecords = await Promise.all(runnerConfigurations.map(async (runner) => ({
+		...runner,
+		identity: await resolveRunnerIdentity(runner.path, runner.source),
+	})));
+	const runnersByHarness = new Map(runnerRecords.map((runner) => [runner.harness, runner]));
 	const aggregateCeilingUsdMicros = lanes.reduce((sum, lane) => sum + lane.ceilingUsdMicros, 0);
 	const concurrency = options.concurrency ?? Math.min(lanes.length, 8);
 	const workers = await Promise.all(lanes.map((lane) => realpath(lane.workerPath)));
-	if (new Set(workers).size !== workers.length) fail("herd workers must use distinct worktrees");
 	lanes.forEach((lane, index) => { lane.workerPath = workers[index]; });
+	for (const [index, lane] of lanes.entries()) {
+		for (let otherIndex = 0; otherIndex < index; otherIndex += 1) {
+			const other = lanes[otherIndex];
+			if (lane.workerPath !== other.workerPath) continue;
+			if (!laneTransitivelyDependsOn(lanes, lane.id, other.id)
+				&& !laneTransitivelyDependsOn(lanes, other.id, lane.id)) {
+				fail(`lanes ${other.id} and ${lane.id} resolve to the same worktree without a dependency ordering`);
+			}
+		}
+	}
 	const workerIdentities = await Promise.all(workers.map(discoverWorkerIdentity));
 	const effectivePlan = validateEffectiveRetryPlan({
 		version: 1,
@@ -292,15 +406,13 @@ async function main() {
 			role: lane.role,
 			objective: lane.objective,
 			workerPath: lane.workerPath,
-			// Recorded only for Pi lanes, so plans without one keep hashing
-			// byte-identically to receipts written before this field existed.
-			...(lane.harness === "pi" ? { harness: "pi" } : {}),
-			route: lane.route ?? (lane.harness === "pi"
-				? (process.env.OX_DRIVER_PI_PROFILE?.trim() || "pi-protected-inherited")
-				: (process.env.OX_DRIVER_OPENCODE_PROFILE?.trim() || "opencode-default")),
+			harness: lane.harness,
+			writerPolicy: lane.writerPolicy,
+			...(lane.dependsOn.length > 0 ? { dependsOn: lane.dependsOn } : {}),
+			route: lane.route ?? runnersByHarness.get(lane.harness).route,
 			...(lane.agent ? { agent: lane.agent } : {}),
 			...(lane.childAgents.length > 0 ? { childAgents: lane.childAgents } : {}),
-			...(lane.harness === "opencode" && options.profileDirectory ? { profileDirectory: options.profileDirectory } : {}),
+			...(options.profileDirectory ? { profileDirectory: options.profileDirectory } : {}),
 			ownedPaths: lane.ownedPaths,
 			excludedPaths: lane.excludedPaths,
 			checks: lane.checks,
@@ -329,34 +441,41 @@ async function main() {
 	workersStarted = true;
 	if (pendingSignal) void guard.cancel();
 	try {
-	const results = await boundedMap(lanes, concurrency, async (lane, index) => {
+	const dependencyResults = await runDependencyPlan(lanes, concurrency, async (lane, index, resultsById) => {
 		if (guard.cancellationRequested) {
-			return { laneId: lane.id, expectedHarness: lane.harness, workerPath: lane.workerPath, role: lane.role, status: "cancelled", controllerError: "lane was not started after orchestration cancellation", ...workerIdentities[index] };
+			return { laneId: lane.id, expectedHarness: lane.harness, harness: lane.harness, workerPath: lane.workerPath, role: lane.role, status: "cancelled", controllerError: "lane was not started after orchestration cancellation", dependsOn: lane.dependsOn, changedPaths: [], unownedChangedPaths: [], acceptance: [], ...workerIdentities[index] };
 		}
+		const runner = runnersByHarness.get(lane.harness);
+		if (!runner) fail(`no runner was resolved for harness ${lane.harness}`);
+		const expectedWorkspaceSha256 = expectedDependencyWorkspace(lane, resultsById);
 		const result = await runWorker(
-			lane.harness === "pi" ? piRunner : runner,
+			runner.path,
 			{
 				...options,
-				objective: lane.objective,
+				objective: dependencyObjective(lane, resultsById),
 				checks: lane.checks,
 				ownedPaths: lane.ownedPaths,
 				excludedPaths: lane.excludedPaths,
 				route: lane.route,
 				agent: lane.agent,
 				childAgents: lane.childAgents,
+				writer: lane.harness === "pi" && lane.writerPolicy === "one-writer",
 				timeoutSeconds: lane.timeoutSeconds,
 				laneCeilingUsdMicros: lane.ceilingUsdMicros,
 				expectedHarness: lane.harness,
-				runnerIdentity: lane.harness === "pi" ? piRunnerIdentity : runnerIdentity,
+				runnerIdentity: runner.identity,
+				...(expectedWorkspaceSha256 ? { expectedWorkspaceSha256 } : {}),
 				...(options.laneSpec ? { lanePrefix: `Lane ${lane.role}` } : {}),
 			},
 			lane.workerPath,
 			lane.role,
 			laneControls(lane.id),
 		);
-		if (result.status !== "completed" && options.failurePolicy === "fail-fast") void guard.cancel("lane-did-not-complete");
-		return { ...result, laneId: lane.id, ...workerIdentities[index] };
+		const reconciled = reconcileLaneWriterPolicy(lane, result);
+		if (reconciled.status !== "completed" && options.failurePolicy === "fail-fast") void guard.cancel("lane-did-not-complete");
+		return { ...reconciled, laneId: lane.id, dependsOn: lane.dependsOn, ...workerIdentities[index] };
 	});
+	const results = dependencyResults.map((result, index) => ({ ...result, ...workerIdentities[index] }));
 	process.off("SIGINT", onSignal);
 	process.off("SIGTERM", onSignal);
 	const costSummary = summarizeOrchestrationCosts(results, aggregateCeilingUsdMicros);
@@ -383,10 +502,7 @@ async function main() {
 		...costSummary,
 		effectivePlan,
 		effectivePlanSha256,
-		runners: [runnerIdentity, ...(piRunnerIdentity ? [piRunnerIdentity] : [])].map((identity, index) => ({
-			harness: piRunnerIdentity && index === 1 ? "pi" : "opencode",
-			...identity,
-		})),
+		runners: runnerRecords.map((runner) => ({ harness: runner.harness, ...runner.identity })),
 		workers: results,
 		integrationRecommendation: safeToReview ? "review-worker-diffs-and-integrate-selected-changes" : "do-not-integrate-until-failures-are-resolved",
 		autoMerged: false,

@@ -20,39 +20,40 @@ const usage = `Usage:
   ox-driver cancel <run-id>
   ox-driver recover <run-id>
 
+From a source checkout, run npm run build, then node packages/cli/dist/main.js <command>.
+
 Environment:
-  OX_DRIVER_STATE_DIR  Override the run-state directory.
-  OX_DRIVER_PI_PROFILE  Select the default Pi route profile.
-  OX_DRIVER_OMP_PROFILE  Select the default OMP route profile.
-  OX_DRIVER_PI_LAUNCHER  Select the guarded attested Pi launcher.
+  OX_DRIVER_STATE_DIR     Override the run-state directory.
+  OX_DRIVER_PI_PROFILE    Select the default Pi route profile.
+  OX_DRIVER_OMP_PROFILE   Select the default OMP route profile.
+  OX_DRIVER_PI_LAUNCHER   Select the attested Pi launcher.
   OX_DRIVER_PI_READ_ONLY=1
+                          Opt in to Pi read-only dispatch, off by default.
   OX_DRIVER_PI_LAUNCHER_SHA256, OX_DRIVER_PI_ENFORCEMENT_SHA256
-                         Opt in to the exact-pinned, ephemeral, solo Pi
-                         read-only lane. Its generated read policy and macOS
-                         Seatbelt profile confine the staged guarded process;
-                         this does not qualify writer/team modes.
-  OX_DRIVER_PI_USEFULNESS_CASE_ROOT, OX_DRIVER_PI_USEFULNESS_CASE_SHA256
-                         With both set, require the exact prepared
-                         usefulness case and produce receipt-bound normalized
-                         controller evidence. Raw Pi tool frames are not saved.
+                          Pin the exact Pi launcher and enforcement digests.
+                          Set both with OX_DRIVER_PI_READ_ONLY=1 to select the
+                          exact-pinned, ephemeral, solo Pi read-only lane. Its
+                          generated read policy and macOS Seatbelt profile
+                          confine the staged process. This does not qualify
+                          writer or team modes.
   OX_DRIVER_OMP_LAUNCHER  Select the pinned OMP binary.
   OX_DRIVER_OMP_PROVIDER, OX_DRIVER_OMP_MODEL, OX_DRIVER_OMP_REASONING
   OX_DRIVER_OMP_AGENT_DIR, OX_DRIVER_OMP_HOME
-                         Configure an exact legacy OMP route (dispatch still
-                         requires containment bound to the admitted process).
+                          Configure an exact OMP route (dispatch still
+                          requires containment bound to the admitted process).
   OX_DRIVER_ACP_LAUNCHER, OX_DRIVER_ACP_LAUNCHER_SHA256
   OX_DRIVER_ACP_PROFILE, OX_DRIVER_ACP_PROFILE_SHA256, OX_DRIVER_ACP_ARGS_JSON
-                         Inspect an exact ACP v1 launcher and profile. Dispatch
-                         remains quarantined.
-  OX_DRIVER_DSH_LAUNCHER  Override the pinned DSH lab launcher.
+                          Inspect an exact ACP v1 launcher and profile.
+                          Dispatch remains quarantined.
+  OX_DRIVER_DSH_LAUNCHER  Override the pinned DSH launcher.
   OX_DRIVER_ROUTE_PROFILE_DIR
-                         Search this absolute directory for route profiles
-                         before the bundled profiles directory.
+                          Search this absolute directory for route profiles
+                          before the bundled profiles directory.
   OX_DRIVER_OPENCODE_PROFILE
-                         Default OpenCode route profile id for doctor and
-                         helper commands. A RunSpec's routeProfile wins.
+                          Default OpenCode route profile id for doctor and
+                          helper commands. A RunSpec's routeProfile wins.
   OX_DRIVER_OPENCODE_LAUNCHER
-                         Override the selected profile's launcher command.`;
+                          Override the selected profile's launcher command.`;
 
 function print(value: unknown): void {
 	process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);

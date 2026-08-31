@@ -7,12 +7,13 @@ task dispatch.
 ## Capability contract
 
 - OpenCode supports one-writer tasks, receipt-aware direct children, pairs,
-  herds, retries, and explicit integration.
-- Pi supports solo one-writer tasks and solo read-only review. A Pi review lane
-  may join a herd or review completed OpenCode work in a handoff.
-- OMP supports attested solo read-only review on the qualified macOS arm64
-  route. It may review completed OpenCode work in a handoff.
-- Ox-managed Pi children and teams are unavailable.
+  team lanes, dependencies, retries, and explicit integration.
+- Pi supports one-writer tasks and read-only review as solo runs or team lanes.
+  Integration accepts Pi writer patches from orchestration receipts.
+- OMP supports attested read-only review as a solo run, team lane, or handoff
+  reviewer on a qualified macOS arm64 route.
+- A team may use any combination of OpenCode, Pi, and OMP lanes.
+- Ox-managed Pi child-profile selection is unavailable.
 - OMP writing and child agents are unavailable.
 - ACP and DeepSeek Harness task dispatch is unavailable.
 

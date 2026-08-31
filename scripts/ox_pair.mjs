@@ -263,6 +263,10 @@ export async function runWorker(runner, options, workerPath, role, controls = {}
 		...(options.profileDirectory ? ["--profile-dir", options.profileDirectory] : []),
 		...(options.expectedWorkspaceSha256 ? ["--expected-workspace-sha256", options.expectedWorkspaceSha256] : []),
 		...(options.expectedRouteProfileSha256 ? ["--expected-route-profile-sha256", options.expectedRouteProfileSha256] : []),
+		// Only a Pi lane sets this. It selects the trusted-host writer contract
+		// in the Pi runner instead of its default read-only review contract; an
+		// OpenCode lane leaves the argv byte-identical.
+		...(options.writer === true ? ["--writer"] : []),
 		...(options.agent ? ["--agent", options.agent] : []),
 		...(options.childAgents ?? []).flatMap((profile) => ["--child-agent", profile]),
 		...options.checks.flatMap((command) => ["--check", command]),

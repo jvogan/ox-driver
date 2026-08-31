@@ -59,10 +59,13 @@ state. Remove only the exact directories you have reviewed and selected.
 ## Workflow changes
 
 - Use an OpenCode managed task for one isolated writer.
-- Use a Pi solo writer when the selected Pi route fits the task.
+- Use a Pi writer when the selected Pi route fits the task.
 - Use Pi or OMP for read-only review.
 - Use handoff when Pi or OMP must review completed OpenCode changes.
-- Use pair or herd for independent OpenCode lanes.
+- Use `ox_team.mjs run` for any combination of OpenCode, Pi, and OMP lanes.
+  Declare `dependsOn` for ordered stages and reuse a worktree only along that
+  order.
+- Use pair for two independent OpenCode writers.
 - Use explicit integration after inspecting lane receipts and patches.
 
 Read the README and the harness reference for the selected route before the

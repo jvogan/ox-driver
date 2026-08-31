@@ -16,11 +16,12 @@
     "packages/adapters/omp",
     "packages/adapters/acp",
     "packages/adapters/dsh",
-    "packages/adapters/probe-only"
+    "packages/adapters/probe-only",
+    "packages/adapters/fake"
   ],
   "scripts": {
     "build": "tsc -b",
-    "test": "npm run build && node --test tests/public/*.test.mjs tests/controller/opencode-task-workflow.test.mjs tests/controller/opencode-profile-adapter.test.mjs tests/controller/ox-route-script.test.mjs tests/controller/ox-pi-script.test.mjs tests/controller/omp-adapter.test.mjs"
+    "test": "npm run build && node --test tests/public/*.test.mjs tests/controller/opencode-task-workflow.test.mjs tests/controller/opencode-profile-adapter.test.mjs tests/controller/ox-route-script.test.mjs tests/controller/ox-pi-script.test.mjs tests/controller/pi-public-adapter.test.mjs tests/controller/omp-adapter.test.mjs tests/controller/cli-runtime.test.mjs tests/controller/opencode-public-cli.test.mjs tests/controller/managed-worktrees.test.mjs tests/controller/orchestration-plan.test.mjs tests/controller/orchestration-retry.test.mjs tests/controller/orchestration-store.test.mjs tests/controller/ox-herd-script.test.mjs tests/controller/ox-team-script.test.mjs tests/controller/ox-omp-script.test.mjs tests/controller/pi-writer-lanes.test.mjs tests/controller/ox-integrate-script.test.mjs tests/controller/ox-opencode-script.test.mjs tests/controller/ox-orchestration-script.test.mjs tests/controller/ox-pair-script.test.mjs tests/controller/registry.test.mjs tests/controller/validation.test.mjs"
   },
   "devDependencies": {
     "@types/node": "22.20.1",

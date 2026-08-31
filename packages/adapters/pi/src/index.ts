@@ -1242,7 +1242,7 @@ export class PiAdapter implements HarnessAdapter {
 
 	async preflight(spec: RunSpec, doctor: HarnessCapabilities): Promise<PreflightIssue[]> {
 		const issues: PreflightIssue[] = [];
-		const directProfile = this.#profile?.runtime?.mode === "direct" ? this.#profile : undefined;
+		const selectedProfileId = this.#profile?.id ?? "pi-protected-inherited";
 		if (spec.tier === "attested" && this.#usefulnessCase) {
 			try {
 				const prepared = await loadPiUsefulnessCase(this.#usefulnessCase);
@@ -1344,12 +1344,12 @@ export class PiAdapter implements HarnessAdapter {
 		if (spec.execution.network !== "configured") {
 			issues.push({ severity: "error", code: "PI_NETWORK_UNSUPPORTED", message: "Pi dispatch preserves the selected launcher's configured network policy" });
 		}
-		if (directProfile ? spec.routeProfile !== directProfile.id : spec.routeProfile !== "pi-protected-inherited") {
+		if (spec.routeProfile !== selectedProfileId) {
 			issues.push({
 				severity: "error",
 				code: spec.routeProfile ? "ROUTE_PROFILE_UNSUPPORTED" : "ROUTE_PROFILE_REQUIRED",
 				message: spec.routeProfile
-					? `the Pi adapter was configured for route profile ${directProfile?.id ?? "pi-protected-inherited"}, not ${spec.routeProfile}`
+					? `the Pi adapter was configured for route profile ${selectedProfileId}, not ${spec.routeProfile}`
 					: "Pi dispatch requires a selected route profile",
 			});
 		}

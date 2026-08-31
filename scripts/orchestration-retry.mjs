@@ -13,12 +13,11 @@ import {
 	validateEffectiveRetryPlanSha256,
 } from "../packages/core/dist/index.js";
 import { createWorkerSupervisor, resolveRunnerIdentity, runWorker } from "./ox_pair.mjs";
-import { OX_DRIVER_SUPPORTS_PI_LANES } from "./distribution.mjs";
+import { configuredLaneRunners } from "./lane-runners.mjs";
+import { OX_DRIVER_SUPPORTS_OMP_LANES, OX_DRIVER_SUPPORTS_PI_LANES } from "./distribution.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const DEFAULT_RUNNER = resolve(ROOT, "scripts", "ox_opencode.mjs");
-const DEFAULT_PI_RUNNER = resolve(ROOT, "scripts", "ox_pi.mjs");
-const PRIVATE_CONTROLLER_CLI = resolve(ROOT, "packages", "cli", "dist", "main.js");
+const CONTROLLER_CLI = resolve(ROOT, "packages", "cli", "dist", "main.js");
 const RETRYABLE_STATUSES = new Set(["failed", "blocked", "unknown"]);
 const MAX_CONTEXT_BYTES = 64 * 1024;
 const MAX_STREAM_BYTES = 12 * 1024;
@@ -51,8 +50,8 @@ function utf8HeadTail(value, maximumBytes) {
 }
 
 function contextFor(lane, previousWorker, previousReceipt, instruction) {
-	const harness = lane.harness ?? "opencode";
-	const continuation = harness === "pi"
+	const readOnly = lane.writerPolicy === "read-only";
+	const continuation = readOnly
 		? "Re-run the read-only review against the existing managed worktree, inspect the current state directly, and return a complete answer to the original objective. Do not modify the workspace."
 		: "Inspect the existing changes, repair the incomplete work, and finish the original objective.";
 	const lines = [
@@ -77,7 +76,7 @@ function contextFor(lane, previousWorker, previousReceipt, instruction) {
 		if (failed.length > 0) lines.push(`The aggregate recorded ${failed.length} unsuccessful acceptance command(s); inspect the current worktree and rerun every declared check.`);
 	}
 	if (Array.isArray(previousWorker.unownedChangedPaths) && previousWorker.unownedChangedPaths.length > 0) {
-		lines.push(harness === "pi"
+		lines.push(readOnly
 			? `Report these previously observed out-of-scope changes without editing them: ${previousWorker.unownedChangedPaths.join(", ")}`
 			: `Resolve or intentionally revert these out-of-scope changes: ${previousWorker.unownedChangedPaths.join(", ")}`);
 	}
@@ -127,17 +126,118 @@ async function priorRunReceipt(store, runId) {
 	}
 }
 
-async function boundedMap(items, concurrency, callback) {
+function retryDependencyRecords(item, resultsById) {
+	const selected = (item.lane.dependsOn ?? []).flatMap((laneId) => {
+		const result = resultsById.get(laneId);
+		return result ? [result] : [];
+	});
+	return [...item.priorDependencies, ...selected];
+}
+
+function retryObjective(item, resultsById) {
+	const dependencies = retryDependencyRecords(item, resultsById);
+	if (dependencies.length === 0) return item.context.preview;
+	const records = dependencies.map((worker) => ({
+		laneId: worker.laneId,
+		role: worker.role,
+		harness: worker.harness ?? worker.expectedHarness,
+		status: worker.status,
+		runId: worker.runId ?? worker.observedRunId ?? worker.requestedRunId,
+		changedPaths: worker.changedPaths ?? [],
+		finalWorkspaceSha256: worker.finalWorkspaceSha256,
+		output: utf8HeadTail(String(worker.finalOutputPreview ?? ""), 8 * 1024),
+	}));
+	return `${item.context.preview}\n\n# Ox team dependency inputs\nUse these latest completed dependency records when continuing this lane.\n${utf8HeadTail(JSON.stringify(records, null, 2), 32 * 1024)}`;
+}
+
+function retryExpectedWorkspaceSha256(item, resultsById) {
+	const digests = retryDependencyRecords(item, resultsById).flatMap((worker) => (
+		worker.workerPath === item.lane.workerPath && typeof worker.finalWorkspaceSha256 === "string"
+			? [worker.finalWorkspaceSha256]
+			: []
+	));
+	const unique = [...new Set(digests)];
+	if (unique.length > 1) fail(`retry lane ${item.lane.id} received conflicting dependency workspace digests`);
+	return unique[0] ?? item.previousReceipt?.finalWorkspaceSha256;
+}
+
+function decorateRetryResult(item, result, dispatchedObjective = item.context.preview) {
+	const preview = utf8HeadTail(dispatchedObjective, MAX_CONTEXT_BYTES);
+	return {
+		...result,
+		laneId: item.lane.id,
+		worktreeId: item.lane.worktreeId,
+		baseCommit: item.lane.baseCommit,
+		previousRunId: item.previousRunId,
+		previousOrchestrationId: item.previousOrchestration.orchestrationId,
+		previousReceiptPath: item.previousOrchestration.receiptPath,
+		previousStatus: item.state.status,
+		attemptNumber: Number(item.state.attemptNumber) + 1,
+		workspaceStateLink: item.workspaceStateLink,
+		continuationContextPreview: preview,
+		continuationContextEvidence: {
+			bytes: Buffer.byteLength(dispatchedObjective, "utf8"),
+			sha256: createHash("sha256").update(dispatchedObjective).digest("hex"),
+			previewBytes: Buffer.byteLength(preview, "utf8"),
+			truncated: preview !== dispatchedObjective,
+			redacted: true,
+		},
+	};
+}
+
+function blockedRetryResult(item, failedDependencies) {
+	return decorateRetryResult(item, {
+		workerPath: item.lane.workerPath,
+		role: item.lane.role,
+		status: "blocked",
+		expectedHarness: item.lane.harness ?? "opencode",
+		requestedRunId: item.requestedRunId,
+		changedPaths: [],
+		unownedChangedPaths: [],
+		acceptance: [],
+		controllerError: `retry lane ${item.lane.id} was not started because dependencies did not complete: ${failedDependencies.join(", ")}`,
+	});
+}
+
+async function dependencyMap(items, concurrency, callback) {
 	const results = new Array(items.length);
-	let next = 0;
-	async function worker() {
-		while (true) {
-			const index = next++;
-			if (index >= items.length) return;
-			results[index] = await callback(items[index], index);
+	const resultsById = new Map();
+	const selectedIds = new Set(items.map((item) => item.lane.id));
+	const pending = new Set(items.map((_item, index) => index));
+	const active = new Map();
+	while (pending.size > 0 || active.size > 0) {
+		let changed = false;
+		for (const index of [...pending]) {
+			const item = items[index];
+			const selectedDependencies = (item.lane.dependsOn ?? []).filter((laneId) => selectedIds.has(laneId));
+			if (selectedDependencies.some((laneId) => !resultsById.has(laneId))) continue;
+			const failed = [
+				...selectedDependencies.filter((laneId) => resultsById.get(laneId)?.status !== "completed"),
+				...item.priorDependencies.filter((worker) => worker.status !== "completed").map((worker) => worker.laneId),
+			];
+			if (failed.length > 0) {
+				const result = blockedRetryResult(item, failed);
+				results[index] = result;
+				resultsById.set(item.lane.id, result);
+				pending.delete(index);
+				changed = true;
+				continue;
+			}
+			if (active.size >= concurrency) break;
+			pending.delete(index);
+			const promise = Promise.resolve(callback(item, index, resultsById)).then((result) => ({ index, result }));
+			active.set(index, promise);
+			changed = true;
 		}
+		if (active.size === 0) {
+			if (pending.size > 0 && !changed) fail("retry scheduler found no runnable lane in an acyclic dependency plan");
+			continue;
+		}
+		const completed = await Promise.race(active.values());
+		active.delete(completed.index);
+		results[completed.index] = completed.result;
+		resultsById.set(items[completed.index].lane.id, completed.result);
 	}
-	await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
 	return results;
 }
 
@@ -149,6 +249,10 @@ export async function retryOrchestration({
 	concurrency,
 	runner: requestedRunner,
 }) {
+	requestedRunner = requestedRunner
+		?? process.env.OX_DRIVER_RETRY_RUNNER?.trim()
+		?? process.env.OX_DRIVER_HERD_RUNNER?.trim()
+		?? undefined;
 	if (!UUID.test(sourceId)) fail("retry source id must be a canonical UUID");
 	if ((laneIds.length === 0) === !failed) fail("retry requires one or more --lane values or --failed");
 	if (new Set(laneIds).size !== laneIds.length) fail("retry lane ids must be unique");
@@ -170,17 +274,23 @@ export async function retryOrchestration({
 		? states.filter((state) => RETRYABLE_STATUSES.has(state.status)).map((state) => state.laneId)
 		: laneIds;
 	if (selectedIds.length === 0) fail("no retryable failed, blocked, or unknown lanes remain");
+	const selectedIdSet = new Set(selectedIds);
 	const selected = [];
 	const workspaceStore = new ManagedWorktreeStore();
 	const durableRuns = runStore();
+	const latestDependencyWorkers = new Map();
+	const latestDependencyWorker = async (laneId) => {
+		if (latestDependencyWorkers.has(laneId)) return latestDependencyWorkers.get(laneId);
+		const state = stateByLane.get(laneId);
+		if (!state) fail(`retry dependency lane does not exist: ${laneId}`);
+		const previous = await previousWorkerFor(orchestrationStore, state);
+		latestDependencyWorkers.set(laneId, previous.worker);
+		return previous.worker;
+	};
 	for (const laneId of selectedIds) {
 		const lane = rootPlan.lanes.find((candidate) => candidate.id === laneId);
 		const state = stateByLane.get(laneId);
 		if (!lane || !state) fail(`retry lane does not exist: ${laneId}`);
-		if (lane.harness === "pi") {
-			if (lane.agent !== undefined) fail(`Pi retry lane ${laneId} cannot select an OpenCode agent profile`);
-			if ((lane.childAgents?.length ?? 0) > 0) fail(`Pi retry lane ${laneId} cannot select OpenCode child agents`);
-		}
 		if (state.status === "completed") fail(`lane ${laneId} already completed; retry only incomplete work`);
 		if (failed && state.status === "cancelled") fail(`cancelled lane ${laneId} requires an explicit --lane retry`);
 		if (!lane.worktreeId) fail(`lane ${laneId} lacks managed-worktree identity and cannot continue in place`);
@@ -193,6 +303,10 @@ export async function retryOrchestration({
 		if (!UUID.test(String(previousRunId ?? ""))) fail(`lane ${laneId} lacks a canonical previous run id`);
 		const previousReceipt = await priorRunReceipt(durableRuns, previousRunId);
 		const context = contextFor(lane, previousWorker, previousReceipt, instruction);
+		const priorDependencies = [];
+		for (const dependencyId of lane.dependsOn ?? []) {
+			if (!selectedIdSet.has(dependencyId)) priorDependencies.push(await latestDependencyWorker(dependencyId));
+		}
 		selected.push({
 			lane,
 			state,
@@ -202,41 +316,43 @@ export async function retryOrchestration({
 			previousRunId,
 			previousReceipt,
 			context,
+			priorDependencies,
 			workspaceStateLink: typeof previousReceipt?.finalWorkspaceSha256 === "string" ? "verified" : "unverified",
 			requestedRunId: randomUUID(),
 		});
 	}
-	const selectedPlan = validateEffectiveRetryPlan({ version: 1, lanes: selected.map((item) => item.lane) });
+	const selectedPlan = validateEffectiveRetryPlan({
+		version: 1,
+		lanes: selected.map((item) => {
+			const dependsOn = (item.lane.dependsOn ?? []).filter((id) => selectedIdSet.has(id));
+			return { ...item.lane, ...(dependsOn.length > 0 ? { dependsOn } : { dependsOn: undefined }) };
+		}),
+	});
 	const selectedPlanSha256 = effectiveRetryPlanSha256(selectedPlan);
-	const requestedOpenCodeRunner = requestedRunner ?? process.env.OX_DRIVER_RETRY_RUNNER?.trim() ?? DEFAULT_RUNNER;
-	if (!isAbsolute(requestedOpenCodeRunner)) fail("OX_DRIVER_RETRY_RUNNER must be an absolute path");
-	const requestedPiRunner = process.env.OX_DRIVER_PI_LANE_RUNNER?.trim() || DEFAULT_PI_RUNNER;
-	if (!isAbsolute(requestedPiRunner)) fail("OX_DRIVER_PI_LANE_RUNNER must be an absolute path");
-	if (selected.some((item) => item.lane.harness === "pi")) {
-		if (!OX_DRIVER_SUPPORTS_PI_LANES) fail("this OpenCode-only distribution cannot dispatch or retry Pi lanes");
-		try {
-			await Promise.all([access(requestedPiRunner), access(PRIVATE_CONTROLLER_CLI)]);
-		} catch {
-			fail("Pi retry support is unavailable in this installation");
-		}
+	const harnesses = [...new Set(selected.map((item) => item.lane.harness ?? "opencode"))];
+	if (harnesses.includes("pi") && !OX_DRIVER_SUPPORTS_PI_LANES) fail("this distribution does not include Pi retry support");
+	if (harnesses.includes("omp") && !OX_DRIVER_SUPPORTS_OMP_LANES) fail("this distribution does not include OMP retry support");
+	if (requestedRunner !== undefined && !isAbsolute(requestedRunner)) fail("the requested retry runner must be an absolute path");
+	const runnerConfigurations = configuredLaneRunners(harnesses).map((configuration) => configuration.harness === "opencode" && requestedRunner
+		? { ...configuration, path: requestedRunner, source: "environment-override" }
+		: configuration);
+	try {
+		await Promise.all([...runnerConfigurations.map((runner) => access(runner.path)), access(CONTROLLER_CLI)]);
+	} catch {
+		fail("one or more selected retry runners are unavailable in this installation");
 	}
-	const usesOpenCode = selected.some((item) => (item.lane.harness ?? "opencode") === "opencode");
-	const usesPi = selected.some((item) => item.lane.harness === "pi");
-	const runnerIdentity = usesOpenCode
-		? await resolveRunnerIdentity(requestedOpenCodeRunner, requestedRunner || process.env.OX_DRIVER_RETRY_RUNNER?.trim() ? "environment-override" : "bundled")
-		: undefined;
-	const piRunnerIdentity = usesPi
-		? await resolveRunnerIdentity(requestedPiRunner, process.env.OX_DRIVER_PI_LANE_RUNNER?.trim() ? "environment-override" : "bundled")
-		: undefined;
+	const runnerRecords = await Promise.all(runnerConfigurations.map(async (runner) => ({
+		...runner,
+		identity: await resolveRunnerIdentity(runner.path, runner.source),
+	})));
+	const runnersByHarness = new Map(runnerRecords.map((runner) => [runner.harness, runner]));
 	const recordedRunners = Array.isArray(root.runners) ? root.runners : [];
-	for (const identity of [runnerIdentity && { harness: "opencode", ...runnerIdentity }, piRunnerIdentity && { harness: "pi", ...piRunnerIdentity }].filter(Boolean)) {
-		const recorded = recordedRunners.find((candidate) => candidate?.harness === identity.harness);
-		if (recorded && (recorded.path !== identity.path || recorded.sha256 !== identity.sha256)) {
-			fail(`${identity.harness} retry runner identity differs from the root orchestration`);
+	for (const runner of runnerRecords) {
+		const recorded = recordedRunners.find((candidate) => candidate?.harness === runner.harness);
+		if (recorded && (recorded.path !== runner.identity.path || recorded.sha256 !== runner.identity.sha256)) {
+			fail(`${runner.harness} retry runner identity differs from the root orchestration`);
 		}
 	}
-	const runner = runnerIdentity?.path;
-	const piRunner = piRunnerIdentity?.path;
 	const retryConcurrency = concurrency ?? Math.min(selected.length, 8);
 	if (!Number.isSafeInteger(retryConcurrency) || retryConcurrency < 1 || retryConcurrency > 32) fail("retry concurrency must be an integer from 1 to 32");
 	const allocation = await orchestrationStore.allocate();
@@ -271,7 +387,8 @@ export async function retryOrchestration({
 	try {
 	let results;
 	try {
-		results = await boundedMap(selected, retryConcurrency, async (item) => {
+		results = await dependencyMap(selected, retryConcurrency, async (item, _index, resultsById) => {
+			const objective = retryObjective(item, resultsById);
 			const result = guard.cancellationRequested ? {
 				workerPath: item.lane.workerPath,
 				role: item.lane.role,
@@ -282,38 +399,28 @@ export async function retryOrchestration({
 				unownedChangedPaths: [],
 				acceptance: [],
 				controllerError: "retry lane was not started after orchestration cancellation",
-			} : await runWorker(item.lane.harness === "pi" ? piRunner : runner, {
-			objective: item.context.preview,
+		} : await runWorker(runnersByHarness.get(item.lane.harness ?? "opencode").path, {
+			objective,
 			checks: [...item.lane.checks],
 			ownedPaths: [...item.lane.ownedPaths],
 			excludedPaths: [...item.lane.excludedPaths],
 			route: item.lane.route,
 			agent: item.lane.agent,
 			childAgents: item.lane.childAgents,
+			// A Pi writer lane must be retried as a writer. Dropping this would
+			// silently continue the lane in read-only review mode.
+			writer: item.lane.harness === "pi" && item.lane.writerPolicy === "one-writer",
 			profileDirectory: item.lane.profileDirectory,
 			timeoutSeconds: item.lane.timeoutSeconds,
 			laneCeilingUsdMicros: item.lane.reportOnlyCostUsdMicros,
 			lanePrefix: `Retry lane ${item.lane.role}`,
-			expectedWorkspaceSha256: item.previousReceipt?.finalWorkspaceSha256,
+			expectedWorkspaceSha256: retryExpectedWorkspaceSha256(item, resultsById),
 			expectedRouteProfileSha256: item.previousReceipt?.routeProfileSha256,
 			requestedRunId: item.requestedRunId,
 			expectedHarness: item.lane.harness ?? "opencode",
-			runnerIdentity: item.lane.harness === "pi" ? piRunnerIdentity : runnerIdentity,
+			runnerIdentity: runnersByHarness.get(item.lane.harness ?? "opencode").identity,
 		}, item.lane.workerPath, item.lane.role, laneControls(item.lane.id));
-		return {
-			...result,
-			laneId: item.lane.id,
-			worktreeId: item.lane.worktreeId,
-			baseCommit: item.lane.baseCommit,
-			previousRunId: item.previousRunId,
-			previousOrchestrationId: item.previousOrchestration.orchestrationId,
-			previousReceiptPath: item.previousOrchestration.receiptPath,
-			previousStatus: item.state.status,
-			attemptNumber: Number(item.state.attemptNumber) + 1,
-			workspaceStateLink: item.workspaceStateLink,
-			continuationContextPreview: item.context.preview,
-			continuationContextEvidence: { ...item.context.evidence, redacted: true },
-		};
+		return decorateRetryResult(item, result, objective);
 		});
 	} finally {
 		process.off("SIGINT", onSignal);
@@ -355,7 +462,7 @@ export async function retryOrchestration({
 		effectivePlan: selectedPlan,
 		effectivePlanSha256: selectedPlanSha256,
 		rootEffectivePlanSha256: root.effectivePlanSha256,
-		runners: [runnerIdentity && { harness: "opencode", ...runnerIdentity }, piRunnerIdentity && { harness: "pi", ...piRunnerIdentity }].filter(Boolean),
+		runners: runnerRecords.map((runner) => ({ harness: runner.harness, ...runner.identity })),
 		concurrency: retryConcurrency,
 		reportOnlyCeilingUsdMicros,
 		...costSummary,

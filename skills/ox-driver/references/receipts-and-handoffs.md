@@ -26,9 +26,13 @@ failed acceptance can fail the run.
 
 ## Orchestration receipts
 
-Task, pair, herd, retry, integration, and handoff workflows add an aggregate
-receipt. The aggregate links child run identifiers, worktrees, attempts,
-effective routes, costs, changed paths, checks, and terminal states.
+The task, pair, team, retry, and handoff workflows add an aggregate receipt of
+the matching `kind`. A team receipt uses the existing `herd` kind for schema
+compatibility. The aggregate links child run identifiers, dependencies,
+worktrees, attempts, effective routes, costs, changed paths, checks, and
+terminal states.
+Integration reads those aggregates and writes none of its own; `ox_integrate.mjs`
+prints its proposal and apply results to stdout.
 
 Inspect a finalized orchestration:
 
@@ -51,16 +55,29 @@ or unverifiable child evidence and preserves every available lane.
 
 ## Handoff order
 
-A successful handoff records this sequence:
+A successful handoff runs this sequence:
 
-1. The controller preflights the OpenCode builder and selected reviewer before
-   the first model request.
-2. The builder completes in one managed worktree.
-3. The controller records the builder's exact Git-visible digest.
-4. The Pi or OMP reviewer receives that admitted digest.
-5. The reviewer completes without a Git-visible change.
-6. Controller-owned acceptance commands run against the reviewed state.
-7. The controller writes the terminal aggregate receipt.
+1. The controller creates one managed worktree from the source repository at
+   the requested ref.
+2. The controller preflights the OpenCode builder route and the selected
+   reviewer route before the first model request. A failed preflight ends the
+   handoff before any paid work.
+3. The controller writes a durable checkpoint holding the normalized options,
+   both run specifications, the preflight evidence, and the admitted workspace
+   digest.
+4. The builder runs in that managed worktree.
+5. The controller records the builder's final Git-visible digest and refuses a
+   workspace that changed after the builder finished.
+6. The Pi or OMP reviewer receives that digest as its admitted workspace state.
+7. The reviewer completes without changing the Git-visible workspace.
+8. Controller-owned acceptance commands run in the reviewer run after the
+   reviewer returns. Every command must pass and leave the digest unchanged.
+9. The controller writes the terminal aggregate receipt.
+
+The aggregate receipt's `evidence` object records steps 6 through 8 as
+`reviewerReceivedExactBuilderState`, `reviewerChangedWorkspace`,
+`acceptancePassed`, and `acceptanceChangedWorkspace`. A handoff reports
+`completed` only when all four hold.
 
 Reviewer text remains advisory. Inspect the linked reviewer receipt and writer
 diff before integration.
@@ -91,6 +108,9 @@ node scripts/ox_orchestration.mjs retry ORCHESTRATION_ID --lane LANE_ID
 Retry preserves the route, agent, owned and excluded paths, checks, timeout,
 reported-cost target, worktree, and attempt lineage. It refuses a changed route
 profile or worktree digest when prior evidence binds that value.
+For dependency-connected lanes, retry waits for selected upstream retries,
+uses the latest completed dependency output, and admits a shared-worktree lane
+against the newest upstream terminal digest.
 
 ## Cancellation and recovery
 

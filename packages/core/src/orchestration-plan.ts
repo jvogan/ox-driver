@@ -7,12 +7,61 @@ export const MICROS_PER_USD = 1_000_000;
 export const MAX_LANE_TEXT_BYTES = 16 * 1024;
 export const MAX_LANE_NAME_BYTES = 1024;
 
+export type OrchestrationHarness = "opencode" | "pi" | "omp";
+export type OrchestrationWriterPolicy = "read-only" | "one-writer";
+
+export interface OrchestrationHarnessCapabilities {
+	readonly harness: OrchestrationHarness;
+	readonly defaultWriterPolicy: OrchestrationWriterPolicy;
+	readonly writerPolicies: readonly OrchestrationWriterPolicy[];
+	readonly acceptsAgentProfile: boolean;
+	readonly acceptsChildAgents: boolean;
+	readonly readOnlyChecks: boolean;
+	readonly requiresExplicitWriterScope: boolean;
+}
+
+const ORCHESTRATION_CAPABILITIES: Readonly<Record<OrchestrationHarness, OrchestrationHarnessCapabilities>> = Object.freeze({
+	opencode: Object.freeze({
+		harness: "opencode",
+		defaultWriterPolicy: "one-writer",
+		writerPolicies: Object.freeze(["one-writer"] as const),
+		acceptsAgentProfile: true,
+		acceptsChildAgents: true,
+		readOnlyChecks: false,
+		requiresExplicitWriterScope: false,
+	}),
+	pi: Object.freeze({
+		harness: "pi",
+		defaultWriterPolicy: "read-only",
+		writerPolicies: Object.freeze(["read-only", "one-writer"] as const),
+		acceptsAgentProfile: false,
+		acceptsChildAgents: false,
+		readOnlyChecks: false,
+		requiresExplicitWriterScope: true,
+	}),
+	omp: Object.freeze({
+		harness: "omp",
+		defaultWriterPolicy: "read-only",
+		writerPolicies: Object.freeze(["read-only"] as const),
+		acceptsAgentProfile: false,
+		acceptsChildAgents: false,
+		readOnlyChecks: true,
+		requiresExplicitWriterScope: false,
+	}),
+});
+
+export function orchestrationHarnessCapabilities(harness: OrchestrationHarness): OrchestrationHarnessCapabilities {
+	return ORCHESTRATION_CAPABILITIES[harness];
+}
+
 export interface OrchestrationPlanLane {
 	id: string;
 	role: string;
 	objective: string;
 	workerPath: string;
-	harness?: "opencode" | "pi";
+	harness?: OrchestrationHarness;
+	writerPolicy?: OrchestrationWriterPolicy;
+	dependsOn?: readonly string[];
 	route?: string;
 	agent?: string;
 	childAgents?: readonly string[];
@@ -26,6 +75,23 @@ export interface OrchestrationPlanLane {
 export interface OrchestrationPlan {
 	version: 1;
 	lanes: readonly OrchestrationPlanLane[];
+}
+
+/**
+ * The writer policy a lane actually dispatches with. OpenCode lanes are always
+ * writers. A Pi lane is read-only unless it explicitly declares a writer, so a
+ * plan can never widen a Pi lane's capability by omission.
+ */
+export function laneWriterPolicy(lane: {
+	harness?: OrchestrationHarness;
+	writerPolicy?: OrchestrationWriterPolicy;
+}): OrchestrationWriterPolicy {
+	const harness = lane.harness ?? "opencode";
+	return lane.writerPolicy ?? orchestrationHarnessCapabilities(harness).defaultWriterPolicy;
+}
+
+export function laneDependsOn(lane: Pick<OrchestrationPlanLane, "dependsOn">): readonly string[] {
+	return lane.dependsOn ?? Object.freeze([]);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -123,7 +189,9 @@ function immutableLane(lane: Record<string, unknown>): OrchestrationPlanLane {
 		role: lane.role as string,
 		objective: lane.objective as string,
 		workerPath: lane.workerPath as string,
-		...(lane.harness !== undefined ? { harness: lane.harness as "opencode" | "pi" } : {}),
+		...(lane.harness !== undefined ? { harness: lane.harness as OrchestrationHarness } : {}),
+		...(lane.writerPolicy !== undefined ? { writerPolicy: lane.writerPolicy as OrchestrationWriterPolicy } : {}),
+		...(lane.dependsOn !== undefined ? { dependsOn: Object.freeze([...(lane.dependsOn as string[])]) } : {}),
 		...(lane.route !== undefined ? { route: lane.route as string } : {}),
 		...(lane.agent !== undefined ? { agent: lane.agent as string } : {}),
 		...(lane.childAgents !== undefined ? { childAgents: Object.freeze([...(lane.childAgents as string[])]) } : {}),
@@ -133,6 +201,52 @@ function immutableLane(lane: Record<string, unknown>): OrchestrationPlanLane {
 		...(lane.timeoutSeconds !== undefined ? { timeoutSeconds: lane.timeoutSeconds as number } : {}),
 		...(lane.costCeilingUsd !== undefined ? { costCeilingUsd: lane.costCeilingUsd as number } : {}),
 	});
+}
+
+function validateDependencyGraph(lanes: readonly OrchestrationPlanLane[], errors: string[]): void {
+	const ids = new Set(lanes.map((lane) => lane.id));
+	const state = new Map<string, "visiting" | "visited">();
+	const byId = new Map(lanes.map((lane) => [lane.id, lane] as const));
+	for (const [index, lane] of lanes.entries()) {
+		for (const dependency of laneDependsOn(lane)) {
+			if (dependency === lane.id) errors.push(`lanes[${index}].dependsOn must not contain its own lane id`);
+			else if (!ids.has(dependency)) errors.push(`lanes[${index}].dependsOn references unknown lane ${dependency}`);
+		}
+	}
+	const visit = (id: string, path: readonly string[]): void => {
+		const status = state.get(id);
+		if (status === "visited") return;
+		if (status === "visiting") {
+			errors.push(`lane dependency cycle: ${[...path, id].join(" -> ")}`);
+			return;
+		}
+		state.set(id, "visiting");
+		const lane = byId.get(id);
+		if (lane) for (const dependency of laneDependsOn(lane)) {
+			if (ids.has(dependency)) visit(dependency, [...path, id]);
+		}
+		state.set(id, "visited");
+	};
+	for (const id of ids) visit(id, []);
+}
+
+export function laneTransitivelyDependsOn(
+	lanes: readonly Pick<OrchestrationPlanLane, "id" | "dependsOn">[],
+	laneId: string,
+	dependencyId: string,
+): boolean {
+	const byId = new Map(lanes.map((lane) => [lane.id, lane] as const));
+	const pending = [...laneDependsOn(byId.get(laneId) ?? {})];
+	const seen = new Set<string>();
+	while (pending.length > 0) {
+		const current = pending.pop()!;
+		if (current === dependencyId) return true;
+		if (seen.has(current)) continue;
+		seen.add(current);
+		const lane = byId.get(current);
+		if (lane) pending.push(...laneDependsOn(lane));
+	}
+	return false;
 }
 
 export function validateOrchestrationPlan(value: unknown): OrchestrationPlan {
@@ -149,14 +263,13 @@ export function validateOrchestrationPlan(value: unknown): OrchestrationPlan {
 		}
 		const ids = new Set<string>();
 		const roles = new Set<string>();
-		const workerPaths = new Set<string>();
 		for (const [index, entry] of lanesValue.entries()) {
 			const field = `lanes[${index}]`;
 			if (!isRecord(entry)) {
 				errors.push(`${field} must be an object`);
 				continue;
 			}
-			rejectUnknownKeys(entry, ["id", "role", "objective", "workerPath", "harness", "route", "agent", "childAgents", "ownedPaths", "excludedPaths", "checks", "timeoutSeconds", "costCeilingUsd"], field, errors);
+			rejectUnknownKeys(entry, ["id", "role", "objective", "workerPath", "harness", "writerPolicy", "dependsOn", "route", "agent", "childAgents", "ownedPaths", "excludedPaths", "checks", "timeoutSeconds", "costCeilingUsd"], field, errors);
 			if (requireBoundedString(entry.id, `${field}.id`, MAX_LANE_NAME_BYTES, errors)) {
 				if (ids.has(entry.id)) errors.push(`${field}.id duplicates lane id ${entry.id}`);
 				ids.add(entry.id);
@@ -166,25 +279,47 @@ export function validateOrchestrationPlan(value: unknown): OrchestrationPlan {
 				roles.add(entry.role);
 			}
 			requireBoundedString(entry.objective, `${field}.objective`, MAX_LANE_TEXT_BYTES, errors);
-			if (requireBoundedString(entry.workerPath, `${field}.workerPath`, MAX_LANE_TEXT_BYTES, errors)) {
-				if (workerPaths.has(entry.workerPath)) errors.push(`${field}.workerPath duplicates lane worker path ${entry.workerPath}`);
-				workerPaths.add(entry.workerPath);
-			}
+			requireBoundedString(entry.workerPath, `${field}.workerPath`, MAX_LANE_TEXT_BYTES, errors);
 			validateAbsolutePath(entry.workerPath, `${field}.workerPath`, errors);
-			if (entry.harness !== undefined && entry.harness !== "opencode" && entry.harness !== "pi") {
-				errors.push(`${field}.harness must be "opencode" or "pi"`);
+			if (entry.harness !== undefined && entry.harness !== "opencode" && entry.harness !== "pi" && entry.harness !== "omp") {
+				errors.push(`${field}.harness must be "opencode", "pi", or "omp"`);
 			}
+			if (entry.dependsOn !== undefined) validateNames(entry.dependsOn, `${field}.dependsOn`, errors);
 			if (entry.route !== undefined) requireBoundedString(entry.route, `${field}.route`, MAX_LANE_NAME_BYTES, errors);
 			if (entry.agent !== undefined) requireBoundedString(entry.agent, `${field}.agent`, MAX_LANE_NAME_BYTES, errors);
 			if (entry.childAgents !== undefined) validateNames(entry.childAgents, `${field}.childAgents`, errors);
 			if (Array.isArray(entry.childAgents) && entry.childAgents.length > 0 && entry.agent === undefined) {
 				errors.push(`${field}.childAgents requires an explicit delegation-capable agent`);
 			}
-			if (entry.harness === "pi" && Array.isArray(entry.childAgents) && entry.childAgents.length > 0) {
-				errors.push(`${field}.childAgents is unavailable for Pi lanes`);
+			const harness = entry.harness === "pi" || entry.harness === "omp" || entry.harness === "opencode"
+				? entry.harness
+				: "opencode";
+			const harnessLabel = harness === "pi" ? "Pi" : harness === "omp" ? "OMP" : "OpenCode";
+			const capabilities = ORCHESTRATION_CAPABILITIES[harness];
+			if (capabilities && entry.agent !== undefined && !capabilities.acceptsAgentProfile) {
+				errors.push(`${field}.agent is unavailable for ${harnessLabel} lanes`);
 			}
-			if (entry.harness === "pi" && Array.isArray(entry.checks) && entry.checks.length > 0) {
-				errors.push(`${field}.checks is unavailable for read-only Pi lanes`);
+			if (capabilities && Array.isArray(entry.childAgents) && entry.childAgents.length > 0 && !capabilities.acceptsChildAgents) {
+				errors.push(`${field}.childAgents is unavailable for ${harnessLabel} lanes`);
+			}
+			if (entry.writerPolicy !== undefined && entry.writerPolicy !== "read-only" && entry.writerPolicy !== "one-writer") {
+				errors.push(`${field}.writerPolicy must be "read-only" or "one-writer"`);
+			}
+			const writerPolicy = laneWriterPolicy({
+				harness,
+				...(entry.writerPolicy === "read-only" || entry.writerPolicy === "one-writer" ? { writerPolicy: entry.writerPolicy } : {}),
+			});
+			if (capabilities && !capabilities.writerPolicies.includes(writerPolicy)) {
+				errors.push(`${field}.writerPolicy "${writerPolicy}" is unavailable for ${harnessLabel} lanes`);
+			}
+			if (capabilities?.requiresExplicitWriterScope && writerPolicy === "one-writer" && (!Array.isArray(entry.ownedPaths) || entry.ownedPaths.length === 0)) {
+				errors.push(`${field}.writerPolicy "one-writer" requires at least one ownedPaths entry on a ${harnessLabel} lane`);
+			}
+			if (writerPolicy === "read-only" && Array.isArray(entry.ownedPaths) && entry.ownedPaths.length > 0) {
+				errors.push(`${field}.ownedPaths requires writerPolicy "one-writer" on a ${harnessLabel} lane`);
+			}
+			if (writerPolicy === "read-only" && Array.isArray(entry.checks) && entry.checks.length > 0 && !capabilities?.readOnlyChecks) {
+				errors.push(`${field}.checks is unavailable for read-only ${harnessLabel} lanes`);
 			}
 			if (entry.ownedPaths !== undefined) validateScopePaths(entry.ownedPaths, `${field}.ownedPaths`, errors);
 			if (entry.excludedPaths !== undefined) validateScopePaths(entry.excludedPaths, `${field}.excludedPaths`, errors);
@@ -194,8 +329,21 @@ export function validateOrchestrationPlan(value: unknown): OrchestrationPlan {
 		}
 	}
 	if (errors.length > 0) throw new Error(`invalid orchestration plan:\n- ${errors.join("\n- ")}`);
-	return Object.freeze({
+	const plan = Object.freeze({
 		version: 1 as const,
 		lanes: Object.freeze((lanesValue as Record<string, unknown>[]).map(immutableLane)),
 	});
+	const dependencyErrors: string[] = [];
+	validateDependencyGraph(plan.lanes, dependencyErrors);
+	if (dependencyErrors.length > 0) throw new Error(`invalid orchestration plan:\n- ${dependencyErrors.join("\n- ")}`);
+	for (const [index, lane] of plan.lanes.entries()) {
+		for (const [otherIndex, other] of plan.lanes.entries()) {
+			if (otherIndex >= index || lane.workerPath !== other.workerPath) continue;
+			if (!laneTransitivelyDependsOn(plan.lanes, lane.id, other.id)
+				&& !laneTransitivelyDependsOn(plan.lanes, other.id, lane.id)) {
+				throw new Error(`invalid orchestration plan:\n- lanes[${index}].workerPath duplicates lane worker path ${lane.workerPath} without dependency ordering after ${other.id}`);
+			}
+		}
+	}
+	return plan;
 }

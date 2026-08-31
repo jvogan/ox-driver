@@ -7,12 +7,13 @@
 - Dispatch OpenCode one-writer tasks in managed Git worktrees.
 - Record OpenCode direct child route, usage, tool, and reported-cost evidence
   when the installed launcher exposes the required metadata.
-- Run two-worker pairs and herds containing up to 32 independent lanes.
-- Dispatch Pi solo writers and solo read-only reviewers through explicit route
-  profiles.
-- Add Pi as an independent herd review lane.
-- Dispatch OMP solo read-only reviews through the qualified attested macOS
-  arm64 route.
+- Run pairs and dependency-aware teams containing up to 32 lanes.
+- Dispatch Pi writers and read-only reviewers alone or in a Pi-only or mixed
+  team.
+- Dispatch OMP read-only reviews alone or as dependency-ordered team lanes on
+  a qualified attested macOS arm64 route.
+- Carry bounded dependency output and receipt evidence into later team stages,
+  with terminal-workspace digest binding when ordered lanes reuse a worktree.
 - Run OpenCode writer handoffs with Pi or OMP review of the writer's exact
   Git-visible result.
 - Resume an interrupted or failed handoff reviewer stage from a durable
@@ -30,8 +31,8 @@
 - Managed worktrees separate Git changes and provide no OS sandbox.
 - Trusted-host cost targets report observed cost after execution.
 - OMP dispatch claims only the qualified read-only macOS arm64 route.
-- Pi children and teams, OMP writing, OMP children, ACP dispatch, and DeepSeek
-  Harness dispatch remain unavailable through Ox Driver.
+- Ox-managed Pi child-profile selection, OMP writing, OMP children, ACP
+  dispatch, and DeepSeek Harness dispatch remain unavailable through Ox Driver.
 
 ### Distribution
 

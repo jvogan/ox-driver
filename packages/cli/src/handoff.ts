@@ -380,8 +380,8 @@ function reviewerSpec(
 		harness: options.reviewer,
 		routeProfile: options.reviewerRoute
 			?? (options.reviewer === "pi"
-				? (process.env.OX_DRIVER_PI_PROFILE?.trim() || "pi-protected-inherited")
-				: (process.env.OX_DRIVER_OMP_PROFILE?.trim() || "omp-explicit-isolated")),
+				? (process.env.OX_DRIVER_PI_PROFILE?.trim() || "pi-default")
+				: (process.env.OX_DRIVER_OMP_PROFILE?.trim() || "omp-default")),
 		task: {
 			objective,
 			cwd,

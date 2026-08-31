@@ -35,7 +35,7 @@ function parseOmpReview(args: string[]): OmpReviewOptions {
 	const checks: string[] = [];
 	let noCheck = false;
 	let timeoutSeconds = 3_600;
-	let routeProfile = process.env.OX_DRIVER_OMP_PROFILE?.trim() || "omp-explicit-isolated";
+	let routeProfile = process.env.OX_DRIVER_OMP_PROFILE?.trim() || "omp-default";
 	for (let index = 0; index < args.length; index += 1) {
 		const argument = args[index];
 		if (argument === "--exclude") excludedPaths.push(relativeScope(args[++index], "--exclude"));

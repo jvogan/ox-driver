@@ -1,8 +1,12 @@
 # OpenCode routes and work
 
+OpenCode is a third-party command-line coding agent. Ox Driver runs the
+installed `opencode` launcher with an explicit `--model provider/model`,
+`--variant EFFORT`, and an optional `--agent` profile.
+
 OpenCode provides trusted-host one-writer tasks, receipt-aware direct children,
-pairs, and herds. Managed worktrees separate Git changes and remain available
-for inspection.
+pairs, and team lanes. Managed worktrees separate Git changes and remain
+available for inspection.
 
 ## Create a route
 
@@ -61,16 +65,26 @@ npm exec -- ox-driver-opencode task /absolute/path/to/repository \
   --check "npm test"
 ```
 
-The primary profile must expose OpenCode's task delegation tool. Each child
-profile must pass the route and writer-policy checks. Every child inherits the
-primary provider, model, and reasoning effort.
+The primary profile must expose OpenCode's task delegation tool. Every child
+inherits the primary provider, model, and reasoning effort.
 
-Ox Driver records the observed direct child graph after execution. It rejects
-route drift, unexpected profiles, grandchildren, incomplete child metadata,
-and direct write tools on a declared read-only child. A shell-capable child can
-still change files, so changed paths remain aggregate to the parent worktree.
+Preflight probes each child profile and rejects one that overrides the
+inherited model, selects a different reasoning effort, or enables the `write`,
+`edit`, or `patch` tool inside a one-writer task.
 
-## Run a pair or herd
+After execution, Ox Driver reconstructs the observed direct child graph from
+OpenCode's session records and fails the receipt on an unadmitted route, an
+unadmitted agent profile, a grandchild, a child outside the root workspace
+identity, or incomplete parent lineage. This reconciliation runs after
+execution and detects disallowed delegation. A
+shell-capable child can still change files, so changed paths remain aggregate
+to the parent worktree.
+
+When OpenCode does not expose the primary agent's runtime identity, the receipt
+records `agentIdentity.runtimeObservation.status: "unavailable"`. The receipt
+still records the configured route and agent profile.
+
+## Run a pair or team
 
 Create one managed worktree per writer:
 
@@ -84,13 +98,23 @@ node scripts/ox_pair.mjs "Implement two independent approaches" \
   --check "npm test"
 ```
 
-`ox_herd.mjs` accepts two to 32 lanes and an optional `--concurrency` value.
-Each lane gets its own objective, worktree, route, agent, scope, checks,
-timeout, and reported-cost target through a lane plan.
+`ox_team.mjs run PLAN.json` accepts two to 32 lanes. Each lane declares its
+harness; an OpenCode-only plan needs no Pi or OMP installation. Plans may mix
+OpenCode with Pi and OMP, run independent branches concurrently, and order
+stages with `dependsOn`. `skills/ox-driver/SKILL.md` carries the plan example
+and lane rules; `schemas/orchestration-plan.schema.json` is the
+machine-readable shape.
 
-Pair and herd collect independent failures by default. Select fail-fast only
-when the remaining lanes must stop after one failure. Roles label lanes; they
-do not share changes. Use handoff for ordered writer and reviewer work.
+Herd defaults: `--concurrency` is the lane count capped at 8, a lane without
+`timeoutSeconds` gets 3600 seconds, and the $0.25 report-only herd target
+divides evenly across the lanes that declare no `costCeilingUsd`. Pair defaults
+to a $0.10 report-only target. Both targets are telemetry compared after
+execution.
+
+Pair and team runs collect independent failures by default. Select
+`--failure-policy fail-fast` when the remaining lanes must stop after one
+failure. Roles label lanes. Use `dependsOn` for staged work and handoff for the
+specialized OpenCode-writer-to-reviewer workflow.
 
 ## Boundary
 
