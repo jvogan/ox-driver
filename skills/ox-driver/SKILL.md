@@ -1,10 +1,9 @@
 ---
 name: ox-driver
 description: >-
-  Delegate repository writing and review from a host agent or terminal to
-  OpenCode, Pi, or OMP. Preserve selected routes and return durable receipts
-  for output, usage, reported cost, process cleanup, changed paths, and
-  acceptance checks.
+  Assign repository research, implementation, and review from a main coding
+  agent or terminal to OpenCode, Pi, or OMP. Run workers alone or together and
+  return their answers, code changes, and run records.
 license: MIT
 metadata:
   version: "2.0.0-dev.0"
@@ -12,8 +11,9 @@ metadata:
 
 # Ox Driver
 
-Dispatch bounded repository work to OpenCode, Pi, or OMP and return the result
-with a durable controller receipt.
+Use Ox Driver to assign repository research, implementation, and review to
+OpenCode, Pi, or OMP from a main coding agent or terminal. Ox returns each
+worker's answer, code changes, and run record.
 
 Work from the Ox Driver source directory. Preserve the user's selected harness,
 launcher, provider, model, reasoning effort, agent profile, repository scope,

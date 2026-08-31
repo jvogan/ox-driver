@@ -94,8 +94,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 21432,
-      "sha256": "d7f2a6feb6f20e45a0e554b4ba66b42db231ce2dad9ba4bb730d6ed62c64f931"
+      "bytes": 21086,
+      "sha256": "326ecc36bcee7464f22f598fbcae5e250d3b257b4012a4c5202f371e0d6d5472"
     },
     {
       "path": "SECURITY.md",
@@ -534,8 +534,8 @@
     },
     {
       "path": "skills/ox-driver/SKILL.md",
-      "bytes": 16249,
-      "sha256": "cb6fb10d8e40a61e7352368df8469ce5aa0ecff651df4ca688dd48556265d024"
+      "bytes": 16298,
+      "sha256": "db8d8d2e4e762b752af817c79e1337aadf67b5edcc0cc7c32b6ee393c3982ddd"
     },
     {
       "path": "skills/ox-driver/THIRD_PARTY_NOTICES.md",

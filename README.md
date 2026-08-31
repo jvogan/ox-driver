@@ -1,47 +1,42 @@
 # Ox Driver
 
-Ox Driver dispatches repository work to third-party coding agents, one worker
-at a time or as a team of up to 32 lanes, and returns a durable receipt for
-each one. Drive it from Claude Code, Codex, Gemini, another skill-loading host
-agent, or a terminal. A receipt records the harness and route that ran, the
-configured provider, model, and effort, available runtime observations, the
-Git-visible paths that changed, reported cost when available, process cleanup,
-and the result of every acceptance check. Ox Driver merges nothing
-automatically.
+Ox Driver lets your main coding agent assign parts of a repository task to
+other coding agents. Use it from Claude Code, Codex, Gemini, another coding
+agent, or a terminal to send research, implementation, and review work to
+OpenCode, Pi, or OMP. Ox can run one worker, start independent workers
+together, or pass completed work into later stages.
+
+Ox returns each worker's answers and code changes to your main agent. Each
+harness stays separately installed, uses the provider, model, and reasoning
+setup you chose, and remains available for direct use.
 
 ```mermaid
 flowchart LR
-    accTitle: Ox Driver harness and receipt flow
-    accDescr: A host agent or terminal drives Ox Driver, which dispatches work to OpenCode, Pi, or OMP and returns durable receipts. ACP and DeepSeek Harness support inspection only.
+    accTitle: Ox Driver agent workflow
+    accDescr: A main coding agent or terminal assigns work through Ox Driver to independent coding agents. Ox Driver gathers their answers and code changes for the main agent. ACP and DeepSeek Harness support inspection only.
 
-    H["Host agent or terminal"] --> O["Ox Driver"]
+    H["Main coding agent or terminal"] --> O["Ox Driver"]
     O --> OC["OpenCode"]
     O --> PI["Pi"]
     O --> OM["OMP"]
     O -. "inspection only" .-> Q["ACP · DeepSeek Harness"]
 
-    OC --> W["Managed Git worktree"]
-    W --> R["Receipt"]
+    OC --> R["Answers and code changes"]
     PI --> R
     OM --> R
+    R --> H
 ```
 
-## What Ox adds
+## How Ox coordinates the work
 
-Use Ox Driver when you need to verify the selected route, Git-visible changes,
-acceptance results, reported cost when available, or the exact terminal
-workspace a reviewer inspected.
+Ox Driver starts independent tasks together, waits for required earlier tasks,
+passes a completed worktree to a later reviewer, retries selected work with the
+same route, and gathers every result for your main agent.
 
-Ox Driver applies one contract across supported harnesses. It schedules two to
-32 independent or dependency-ordered lanes, preserves selected route profiles
-through retries, binds a handoff reviewer or an ordered reviewer that reuses a
-writer's worktree to the writer's terminal workspace digest, reconciles
-Git-visible changes against declared paths, runs acceptance commands, and
-stores durable per-run and aggregate receipts. It also proposes, exports, and
-applies selected writer patches in a separate integration worktree. Each
-harness remains independently usable. Ox Driver preserves the selected
-provider, model, and reasoning effort. Each adapter enforces the tool, context,
-and child policy declared for that lane.
+For writing tasks, Ox compares changed files with the paths you assigned, runs
+the checks you specified, and prepares selected patches in a separate
+worktree. It records each worker's answer, route, usage, changed files, and
+check results. You decide which changes enter your repository.
 
 Each OpenCode writer runs in a managed Git worktree that Ox Driver creates from
 `HEAD`. Pi and OMP run in the directory you name. Create a disposable worktree
