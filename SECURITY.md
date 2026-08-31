@@ -1,23 +1,55 @@
 # Security
 
-Do not put vulnerability details, credentials, or private data in a public
-issue. Use GitHub's private vulnerability report form when the repository
-Security tab provides it. If that form is unavailable, open a public issue
-containing only a request for private security contact; wait for a private
-channel before sharing the report.
+Report vulnerabilities through the repository's GitHub Security Advisories
+page. Select **Report a vulnerability** and include the smallest non-sensitive
+reproduction that demonstrates the affected boundary.
 
-Include the affected version, operating system, harness and package versions, the
-smallest non-sensitive reproduction, and the expected boundary. Remove tokens,
-paths, prompts, transcripts, and repository content that could identify a user
-or disclose private data.
+Do not put exploit details, authentication values, prompts, transcripts,
+repository content, or identifying filesystem paths in a GitHub issue. If the
+report form is unavailable, open an issue that requests a secure reporting
+channel and omit vulnerability details.
 
-The public OpenCode preview is a trusted-host controller. OpenCode receives the
-filesystem and network access of the installed launcher process. A managed
-worktree separates Git changes; the launcher retains access to other host paths
-and credentials. Run Ox Driver only where the worker may use the available
-files, credentials, and network access.
+Include these facts when available:
+
+- Ox Driver version or commit;
+- operating system;
+- harness and harness version;
+- selected trust tier;
+- expected boundary;
+- observed result;
+- receipt fields required to reproduce the failure after redaction.
+
+## Trusted-host boundary
+
+OpenCode and direct Pi runs use the filesystem, process, and network access
+available to their installed launcher processes. A managed Git worktree
+separates changes from the source checkout and provides no OS sandbox.
 
 `--owned` and `--exclude` classify Git-visible changes after execution. They do
-not prevent reads or writes. Reported cost is evaluated after execution and
-cannot stop provider billing. Configure provider-side or launcher-side limits
-when a run requires a hard spending cap.
+not prevent reads or writes. Inspect writer diffs and receipts before
+integration.
+
+Trusted-host cost targets evaluate reported cost after execution. Configure a
+provider-side or launcher-side limit when a run requires a hard spending cap.
+
+## Attested boundary
+
+OMP dispatch claims only the qualified solo read-only macOS arm64 route. Its
+route checks bind the launcher, runtime configuration, tool inventory, and
+process-containment mechanism. Writing, child agents, other operating systems,
+and other containment-mechanism digests remain unavailable.
+
+## Inspection-only adapters
+
+ACP and DeepSeek Harness doctors make no model request. Their adapters expose
+inspection evidence and reject task dispatch during preflight and execution.
+
+## Stored data
+
+Ox Driver state can contain objectives, absolute paths, terminal output,
+events, receipts, check output, patches, worktree metadata, and configured
+route identity. Select state roots and retention periods that match the target
+repository's data policy.
+
+Keep authentication values out of route profiles, task text, prompts,
+receipts, repositories, documentation, and vulnerability reports.

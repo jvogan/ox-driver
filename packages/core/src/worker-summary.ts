@@ -11,7 +11,7 @@ const MAX_CONTROLLER_ERROR_PREVIEW_BYTES = 4 * 1024;
 const MAX_FINAL_OUTPUT_PREVIEW_BYTES = 16 * 1024;
 const MAX_ROLE_PREVIEW_BYTES = 1024;
 const MAX_RUN_ID_BYTES = 256;
-const HARNESSES = new Set(["opencode"]);
+const HARNESSES = new Set(["opencode", "pi", "omp", "dsh", "acp"]);
 
 interface TextEvidence {
 	redacted?: true;

@@ -12,7 +12,7 @@ export interface OrchestrationPlanLane {
 	role: string;
 	objective: string;
 	workerPath: string;
-	harness?: "opencode";
+	harness?: "opencode" | "pi";
 	route?: string;
 	agent?: string;
 	childAgents?: readonly string[];
@@ -123,7 +123,7 @@ function immutableLane(lane: Record<string, unknown>): OrchestrationPlanLane {
 		role: lane.role as string,
 		objective: lane.objective as string,
 		workerPath: lane.workerPath as string,
-		...(lane.harness !== undefined ? { harness: lane.harness as "opencode" } : {}),
+		...(lane.harness !== undefined ? { harness: lane.harness as "opencode" | "pi" } : {}),
 		...(lane.route !== undefined ? { route: lane.route as string } : {}),
 		...(lane.agent !== undefined ? { agent: lane.agent as string } : {}),
 		...(lane.childAgents !== undefined ? { childAgents: Object.freeze([...(lane.childAgents as string[])]) } : {}),
@@ -171,14 +171,20 @@ export function validateOrchestrationPlan(value: unknown): OrchestrationPlan {
 				workerPaths.add(entry.workerPath);
 			}
 			validateAbsolutePath(entry.workerPath, `${field}.workerPath`, errors);
-			if (entry.harness !== undefined && entry.harness !== "opencode") {
-				errors.push(`${field}.harness must be "opencode"`);
+			if (entry.harness !== undefined && entry.harness !== "opencode" && entry.harness !== "pi") {
+				errors.push(`${field}.harness must be "opencode" or "pi"`);
 			}
 			if (entry.route !== undefined) requireBoundedString(entry.route, `${field}.route`, MAX_LANE_NAME_BYTES, errors);
 			if (entry.agent !== undefined) requireBoundedString(entry.agent, `${field}.agent`, MAX_LANE_NAME_BYTES, errors);
 			if (entry.childAgents !== undefined) validateNames(entry.childAgents, `${field}.childAgents`, errors);
 			if (Array.isArray(entry.childAgents) && entry.childAgents.length > 0 && entry.agent === undefined) {
 				errors.push(`${field}.childAgents requires an explicit delegation-capable agent`);
+			}
+			if (entry.harness === "pi" && Array.isArray(entry.childAgents) && entry.childAgents.length > 0) {
+				errors.push(`${field}.childAgents is unavailable for Pi lanes`);
+			}
+			if (entry.harness === "pi" && Array.isArray(entry.checks) && entry.checks.length > 0) {
+				errors.push(`${field}.checks is unavailable for read-only Pi lanes`);
 			}
 			if (entry.ownedPaths !== undefined) validateScopePaths(entry.ownedPaths, `${field}.ownedPaths`, errors);
 			if (entry.excludedPaths !== undefined) validateScopePaths(entry.excludedPaths, `${field}.excludedPaths`, errors);

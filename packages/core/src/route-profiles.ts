@@ -24,6 +24,14 @@ export interface RouteProfile {
 	route: { source: "launcher" } | ({ source: "explicit" } & ConfiguredRoute);
 	agent?: { defaultProfile?: string; allowedProfiles?: string[] };
 	defaults?: { timeoutSeconds?: number; reportOnlyCostUsdMicros?: number };
+	runtime?: {
+		mode?: "direct" | "guarded";
+		agentDirectory?: string;
+		homeDirectory?: string;
+		environmentNames?: string[];
+		expectedVersion?: string;
+		expectedSha256?: string;
+	};
 	pricingPolicy: "report-only" | "from-launcher" | "zero-only";
 	credentialPolicy?: string;
 	notice?: string;
@@ -79,7 +87,7 @@ function optionalObject(value: unknown, label: string): Record<string, unknown> 
 
 export function validateRouteProfile(value: unknown): RouteProfile {
 	const root = record(value, "route profile");
-	keys(root, ["version", "id", "status", "harness", "tier", "launcher", "route", "agent", "defaults", "pricingPolicy", "credentialPolicy", "notice"], "route profile");
+	keys(root, ["version", "id", "status", "harness", "tier", "launcher", "route", "agent", "defaults", "runtime", "pricingPolicy", "credentialPolicy", "notice"], "route profile");
 	if (root.version !== 1) throw new Error("route profile version must be 1");
 	const id = string(root.id, "route profile id", 128);
 	const harness = string(root.harness, "route profile harness", 128);
@@ -140,6 +148,37 @@ export function validateRouteProfile(value: unknown): RouteProfile {
 		};
 	}
 
+	const runtimeRaw = optionalObject(root.runtime, "route profile runtime");
+	let runtime: RouteProfile["runtime"];
+	if (runtimeRaw) {
+		keys(runtimeRaw, ["mode", "agentDirectory", "homeDirectory", "environmentNames", "expectedVersion", "expectedSha256"], "route profile runtime");
+		if (runtimeRaw.mode !== undefined && runtimeRaw.mode !== "direct" && runtimeRaw.mode !== "guarded") {
+			throw new Error("route profile runtime mode must be direct or guarded");
+		}
+		const agentDirectory = runtimeRaw.agentDirectory === undefined ? undefined : string(runtimeRaw.agentDirectory, "route profile runtime agentDirectory");
+		const homeDirectory = runtimeRaw.homeDirectory === undefined ? undefined : string(runtimeRaw.homeDirectory, "route profile runtime homeDirectory");
+		if (agentDirectory !== undefined && !isAbsolute(agentDirectory)) throw new Error("route profile runtime agentDirectory must be absolute");
+		if (homeDirectory !== undefined && !isAbsolute(homeDirectory)) throw new Error("route profile runtime homeDirectory must be absolute");
+		const environmentNames = runtimeRaw.environmentNames === undefined
+			? undefined
+			: strings(runtimeRaw.environmentNames, "route profile runtime environmentNames", 64);
+		if (environmentNames?.some((name) => !/^[A-Z][A-Z0-9_]*$/.test(name))) {
+			throw new Error("route profile runtime environmentNames must use uppercase environment-variable names");
+		}
+		const expectedSha256 = runtimeRaw.expectedSha256 === undefined ? undefined : string(runtimeRaw.expectedSha256, "route profile runtime expectedSha256", 64);
+		if (expectedSha256 !== undefined && !/^[0-9a-f]{64}$/.test(expectedSha256)) {
+			throw new Error("route profile runtime expectedSha256 must be a lowercase SHA-256 digest");
+		}
+		runtime = {
+			...(runtimeRaw.mode === undefined ? {} : { mode: runtimeRaw.mode as "direct" | "guarded" }),
+			...(agentDirectory === undefined ? {} : { agentDirectory }),
+			...(homeDirectory === undefined ? {} : { homeDirectory }),
+			...(environmentNames === undefined ? {} : { environmentNames }),
+			...(runtimeRaw.expectedVersion === undefined ? {} : { expectedVersion: string(runtimeRaw.expectedVersion, "route profile runtime expectedVersion", 128) }),
+			...(expectedSha256 === undefined ? {} : { expectedSha256 }),
+		};
+	}
+
 	if (!["report-only", "from-launcher", "zero-only"].includes(String(root.pricingPolicy))) throw new Error("route profile pricingPolicy is unsupported");
 	return {
 		version: 1,
@@ -151,6 +190,7 @@ export function validateRouteProfile(value: unknown): RouteProfile {
 		route,
 		...(agent ? { agent } : {}),
 		...(defaults ? { defaults } : {}),
+		...(runtime ? { runtime } : {}),
 		pricingPolicy: root.pricingPolicy as RouteProfile["pricingPolicy"],
 		...(root.credentialPolicy === undefined ? {} : { credentialPolicy: string(root.credentialPolicy, "route profile credentialPolicy", 512) }),
 		...(root.notice === undefined ? {} : { notice: string(root.notice, "route profile notice") }),

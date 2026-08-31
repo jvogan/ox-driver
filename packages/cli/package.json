@@ -1,0 +1,17 @@
+{
+  "name": "@ox-driver/cli",
+  "version": "2.0.0-dev.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "ox-driver": "dist/main.js"
+  },
+  "dependencies": {
+    "@ox-driver/adapter-acp": "2.0.0-dev.0",
+    "@ox-driver/adapter-dsh": "2.0.0-dev.0",
+    "@ox-driver/adapter-omp": "2.0.0-dev.0",
+    "@ox-driver/adapter-opencode": "2.0.0-dev.0",
+    "@ox-driver/adapter-pi": "2.0.0-dev.0",
+    "@ox-driver/core": "2.0.0-dev.0"
+  }
+}

@@ -271,7 +271,7 @@ function validateReceipt(value: unknown, id: string, receiptPath: string): Store
 		boundedString(worker.role, `orchestration worker ${index} role`, 1024);
 		if (worker.laneId !== undefined) boundedString(worker.laneId, `orchestration worker ${index} lane id`, 1024);
 		if (!WORKER_STATUSES.has(String(worker.status))) throw new Error(`orchestration worker ${index} status is invalid`);
-		if (worker.expectedHarness !== undefined && !["opencode"].includes(String(worker.expectedHarness))) {
+		if (worker.expectedHarness !== undefined && !["opencode", "pi", "omp", "dsh", "acp"].includes(String(worker.expectedHarness))) {
 			throw new Error(`orchestration worker ${index} expected harness is invalid`);
 		}
 		if (worker.worktreeId !== undefined) {
@@ -294,7 +294,7 @@ function validateReceipt(value: unknown, id: string, receiptPath: string): Store
 			boundedString(worker.role, `historical reviewer worker ${index} role`, 1024);
 			if (worker.laneId !== undefined) boundedString(worker.laneId, `historical reviewer worker ${index} lane id`, 1024);
 			if (!WORKER_STATUSES.has(String(worker.status))) throw new Error(`historical reviewer worker ${index} status is invalid`);
-			if (worker.expectedHarness !== undefined && !["opencode"].includes(String(worker.expectedHarness))) {
+			if (worker.expectedHarness !== undefined && !["opencode", "pi", "omp", "dsh", "acp"].includes(String(worker.expectedHarness))) {
 				throw new Error(`historical reviewer worker ${index} expected harness is invalid`);
 			}
 			if (worker.worktreeId !== undefined) validateId(boundedString(worker.worktreeId, `historical reviewer worker ${index} worktree id`, 128));

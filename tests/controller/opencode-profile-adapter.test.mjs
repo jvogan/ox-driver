@@ -176,7 +176,7 @@ test("rejects wrong profile boundaries and leaves launcher-derived routes unqual
 	const launcher = await launcherFixture();
 	const active = profile("route-a", launcher, "provider-a", "model-a", "max", "builder-a");
 	assert.throws(() => new OpenCodeAdapter({ profile: { ...active, status: "retired" } }), /must be active/);
-	assert.throws(() => new OpenCodeAdapter({ profile: { ...active, harness: "unsupported" } }), /targets unsupported/);
+	assert.throws(() => new OpenCodeAdapter({ profile: { ...active, harness: "pi" } }), /targets pi/);
 	assert.throws(() => new OpenCodeAdapter({ profile: { ...active, tier: "attested" } }), /trusted-host/);
 	const derived = { ...active, route: { source: "launcher" } };
 	const doctor = await new OpenCodeAdapter({ profile: derived }).doctor();

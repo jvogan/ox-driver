@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
-import { readFile, realpath } from "node:fs/promises";
+import { access, readFile, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createWorkerSupervisor, discoverWorkerIdentity, resolveRunnerIdentity, runWorker } from "./ox_pair.mjs";
 import { retryOrchestration } from "./orchestration-retry.mjs";
+import { OX_DRIVER_SUPPORTS_PI_LANES } from "./distribution.mjs";
 import {
 	effectiveRetryPlanSha256,
 	MICROS_PER_USD,
@@ -17,6 +18,8 @@ import { OrchestrationReceiptStore } from "../packages/core/dist/orchestration-s
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_RUNNER = resolve(ROOT, "scripts", "ox_opencode.mjs");
+const DEFAULT_PI_RUNNER = resolve(ROOT, "scripts", "ox_pi.mjs");
+const PRIVATE_CONTROLLER_CLI = resolve(ROOT, "packages", "cli", "dist", "main.js");
 const MAX_WORKERS = 32;
 
 function fail(message) {
@@ -171,6 +174,10 @@ function runtimeLanes(plan, options) {
 	let sharedIndex = 0;
 	const lanes = plan.lanes.map((lane) => {
 		const harness = lane.harness ?? "opencode";
+		if (harness === "pi") {
+			if (lane.agent !== undefined) fail(`lane ${lane.id} uses Pi and cannot select an OpenCode agent profile`);
+			if ((lane.childAgents?.length ?? 0) > 0) fail(`lane ${lane.id} uses Pi and cannot select OpenCode child agents`);
+		}
 		const ceilingUsdMicros = lane.costCeilingUsd === undefined
 			? baseLaneCeiling + (sharedIndex < extraMicros ? 1 : 0)
 			: Math.round(lane.costCeilingUsd * MICROS_PER_USD);
@@ -184,15 +191,20 @@ function runtimeLanes(plan, options) {
 			route: lane.route,
 			agent: lane.agent,
 			childAgents: [...(lane.childAgents ?? [])],
-			ownedPaths: lane.ownedPaths ? [...lane.ownedPaths] : ["."],
+			ownedPaths: harness === "pi" ? [] : lane.ownedPaths ? [...lane.ownedPaths] : ["."],
 			excludedPaths: [...new Set([".env", ".git", ...(lane.excludedPaths ?? [])])],
-			checks: [...(lane.checks ?? []), ...options.checks],
+			// Read-only Pi lanes never execute shell acceptance commands. Shared
+			// checks apply only to writer lanes; an explicit Pi check is rejected
+			// by plan validation before allocation.
+			checks: harness === "pi" ? [] : [...(lane.checks ?? []), ...options.checks],
 			timeoutSeconds: lane.timeoutSeconds ?? options.timeoutSeconds,
 			ceilingUsdMicros,
 		};
 	});
 	if (!options.noCheck) {
-		const lane = lanes.find((item) => item.checks.length === 0);
+		// A read-only Pi review lane produces a report, not a change, so it may
+		// run without a check while writer lanes still require one.
+		const lane = lanes.find((item) => item.checks.length === 0 && item.harness !== "pi");
 		if (lane) fail(`lane ${lane.id} requires at least one plan check, one shared --check, or explicit --no-check`);
 	}
 	return lanes;
@@ -249,10 +261,24 @@ async function main() {
 	const options = parse(process.argv.slice(2));
 	const requestedRunner = process.env.OX_DRIVER_HERD_RUNNER?.trim() || DEFAULT_RUNNER;
 	if (!isAbsolute(requestedRunner)) fail("OX_DRIVER_HERD_RUNNER must be an absolute path");
+	const requestedPiRunner = process.env.OX_DRIVER_PI_LANE_RUNNER?.trim() || DEFAULT_PI_RUNNER;
+	if (!isAbsolute(requestedPiRunner)) fail("OX_DRIVER_PI_LANE_RUNNER must be an absolute path");
 	const plan = await loadPlan(options);
 	const lanes = runtimeLanes(plan, options);
+	if (lanes.some((lane) => lane.harness === "pi")) {
+		if (!OX_DRIVER_SUPPORTS_PI_LANES) fail("this OpenCode-only distribution cannot dispatch or retry Pi lanes");
+		try {
+			await Promise.all([access(requestedPiRunner), access(PRIVATE_CONTROLLER_CLI)]);
+		} catch {
+			fail("Pi lane support is unavailable in this installation");
+		}
+	}
 	const runnerIdentity = await resolveRunnerIdentity(requestedRunner, process.env.OX_DRIVER_HERD_RUNNER?.trim() ? "environment-override" : "bundled");
+	const piRunnerIdentity = lanes.some((lane) => lane.harness === "pi")
+		? await resolveRunnerIdentity(requestedPiRunner, process.env.OX_DRIVER_PI_LANE_RUNNER?.trim() ? "environment-override" : "bundled")
+		: undefined;
 	const runner = runnerIdentity.path;
+	const piRunner = piRunnerIdentity?.path;
 	const aggregateCeilingUsdMicros = lanes.reduce((sum, lane) => sum + lane.ceilingUsdMicros, 0);
 	const concurrency = options.concurrency ?? Math.min(lanes.length, 8);
 	const workers = await Promise.all(lanes.map((lane) => realpath(lane.workerPath)));
@@ -266,7 +292,12 @@ async function main() {
 			role: lane.role,
 			objective: lane.objective,
 			workerPath: lane.workerPath,
-			route: lane.route ?? (process.env.OX_DRIVER_OPENCODE_PROFILE?.trim() || "opencode-default"),
+			// Recorded only for Pi lanes, so plans without one keep hashing
+			// byte-identically to receipts written before this field existed.
+			...(lane.harness === "pi" ? { harness: "pi" } : {}),
+			route: lane.route ?? (lane.harness === "pi"
+				? (process.env.OX_DRIVER_PI_PROFILE?.trim() || "pi-protected-inherited")
+				: (process.env.OX_DRIVER_OPENCODE_PROFILE?.trim() || "opencode-default")),
 			...(lane.agent ? { agent: lane.agent } : {}),
 			...(lane.childAgents.length > 0 ? { childAgents: lane.childAgents } : {}),
 			...(lane.harness === "opencode" && options.profileDirectory ? { profileDirectory: options.profileDirectory } : {}),
@@ -303,7 +334,7 @@ async function main() {
 			return { laneId: lane.id, expectedHarness: lane.harness, workerPath: lane.workerPath, role: lane.role, status: "cancelled", controllerError: "lane was not started after orchestration cancellation", ...workerIdentities[index] };
 		}
 		const result = await runWorker(
-			runner,
+			lane.harness === "pi" ? piRunner : runner,
 			{
 				...options,
 				objective: lane.objective,
@@ -316,7 +347,7 @@ async function main() {
 				timeoutSeconds: lane.timeoutSeconds,
 				laneCeilingUsdMicros: lane.ceilingUsdMicros,
 				expectedHarness: lane.harness,
-				runnerIdentity,
+				runnerIdentity: lane.harness === "pi" ? piRunnerIdentity : runnerIdentity,
 				...(options.laneSpec ? { lanePrefix: `Lane ${lane.role}` } : {}),
 			},
 			lane.workerPath,
@@ -352,7 +383,10 @@ async function main() {
 		...costSummary,
 		effectivePlan,
 		effectivePlanSha256,
-		runners: [{ harness: "opencode", ...runnerIdentity }],
+		runners: [runnerIdentity, ...(piRunnerIdentity ? [piRunnerIdentity] : [])].map((identity, index) => ({
+			harness: piRunnerIdentity && index === 1 ? "pi" : "opencode",
+			...identity,
+		})),
 		workers: results,
 		integrationRecommendation: safeToReview ? "review-worker-diffs-and-integrate-selected-changes" : "do-not-integrate-until-failures-are-resolved",
 		autoMerged: false,

@@ -1,14 +1,14 @@
 {
   "files": [],
   "references": [
-    {
-      "path": "packages/core"
-    },
-    {
-      "path": "packages/adapters/opencode"
-    },
-    {
-      "path": "packages/opencode-cli"
-    }
+    { "path": "packages/core" },
+    { "path": "packages/adapters/probe-only" },
+    { "path": "packages/adapters/opencode" },
+    { "path": "packages/adapters/pi" },
+    { "path": "packages/adapters/omp" },
+    { "path": "packages/adapters/acp" },
+    { "path": "packages/adapters/dsh" },
+    { "path": "packages/cli" },
+    { "path": "packages/opencode-cli" }
   ]
 }

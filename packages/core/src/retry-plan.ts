@@ -14,7 +14,7 @@ export interface EffectiveRetryLane {
 	role: string;
 	objective: string;
 	workerPath: string;
-	harness?: "opencode";
+	harness?: "opencode" | "pi";
 	route: string;
 	agent?: string;
 	childAgents?: readonly string[];
@@ -85,8 +85,8 @@ function lane(value: unknown, index: number): EffectiveRetryLane {
 		"ownedPaths", "excludedPaths", "checks", "timeoutSeconds", "reportOnlyCostUsdMicros",
 		"worktreeId", "baseCommit",
 	], `effective retry lane ${index}`);
-	if (input.harness !== undefined && input.harness !== "opencode") {
-		throw new Error(`effective retry lane ${index} harness must be "opencode"`);
+	if (input.harness !== undefined && input.harness !== "opencode" && input.harness !== "pi") {
+		throw new Error(`effective retry lane ${index} harness must be "opencode" or "pi"`);
 	}
 	const timeoutSeconds = input.timeoutSeconds;
 	if (!Number.isSafeInteger(timeoutSeconds) || Number(timeoutSeconds) < 1 || Number(timeoutSeconds) > 86_400) {
@@ -107,7 +107,7 @@ function lane(value: unknown, index: number): EffectiveRetryLane {
 		workerPath: absolutePath(input.workerPath, `effective retry lane ${index} workerPath`),
 		// Serialized keys stay provided-only, so a lane without harness hashes
 		// byte-identically to plans recorded before this field existed.
-		...(input.harness === undefined ? {} : { harness: input.harness as "opencode" }),
+		...(input.harness === undefined ? {} : { harness: input.harness as "opencode" | "pi" }),
 		route: string(input.route, `effective retry lane ${index} route`, MAX_NAME_BYTES),
 		...(input.agent === undefined ? {} : { agent: string(input.agent, `effective retry lane ${index} agent`, MAX_NAME_BYTES) }),
 		...(input.childAgents === undefined ? {} : { childAgents: nameList(input.childAgents, `effective retry lane ${index} childAgents`) }),

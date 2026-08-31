@@ -93,9 +93,7 @@ async function sourceEvidence(source) {
 }
 
 async function invokeTask(fixtureValue, objective, checks, extra = []) {
-	const bin = process.env.OX_DRIVER_PUBLIC_PREVIEW === "1"
-		? join(process.cwd(), "node_modules", ".bin", "ox-driver-opencode")
-		: join(process.cwd(), "packages", "opencode-cli", "bin", "ox-driver.mjs");
+	const bin = join(process.cwd(), "packages", "opencode-cli", "bin", "ox-driver.mjs");
 	const args = ["task", fixtureValue.source, objective, "--owned", "owned", "--profile-dir", fixtureValue.profiles,
 		...checks.flatMap((command) => ["--check", command]), ...extra];
 	try {
@@ -111,9 +109,7 @@ function marker(stderr, name) {
 }
 
 test("installed task help documents its complete useful surface", async () => {
-	const bin = process.env.OX_DRIVER_PUBLIC_PREVIEW === "1"
-		? join(process.cwd(), "node_modules", ".bin", "ox-driver-opencode")
-		: join(process.cwd(), "packages", "opencode-cli", "bin", "ox-driver.mjs");
+	const bin = join(process.cwd(), "packages", "opencode-cli", "bin", "ox-driver.mjs");
 	const result = await execFileAsync(bin, ["task", "--help"], { cwd: process.cwd() });
 	for (const flag of ["--ref", "--owned", "--exclude", "--check", "--no-check", "--route", "--profile-dir", "--agent", "--child-agent", "--timeout", "--cost-ceiling"]) {
 		assert.match(result.stdout, new RegExp(flag.replace("--", "--")));

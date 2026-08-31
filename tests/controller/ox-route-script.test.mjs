@@ -11,7 +11,7 @@ import { trackedMkdtemp } from "./helpers/tracked-temp.mjs";
 
 const execFileAsync = promisify(execFile);
 
-const NOTICE = "Created by scripts/ox_route.mjs init-opencode. This profile contains no credentials; the operator's installed OpenCode launcher provides the route's authentication.";
+const NOTICE = "Created by scripts/ox_route.mjs init-opencode. This profile contains no credentials; the installed opencode launcher provides authentication.";
 
 function expectedProfile(id, launcher, provider, model, reasoning, agent) {
 	return {
@@ -167,4 +167,39 @@ test("both commands default to the opencode-default profile id", async () => {
 	const verdict = JSON.parse(checked.stdout);
 	assert.equal(verdict.valid, true);
 	assert.equal(verdict.profile, "opencode-default");
+});
+
+test("init-pi creates a direct trusted-host route without credentials", async () => {
+	const directory = await trackedMkdtemp(join(tmpdir(), "ox-driver-ox-route-pi-"));
+	const result = await runScript([
+		"scripts/ox_route.mjs", "init-pi", "--launcher", "pi", "--provider", "provider-a",
+		"--model", "model-a", "--reasoning", "max", "--expected-version", "0.84.4",
+		"--profile-dir", directory,
+	]);
+	const summary = JSON.parse(result.stdout);
+	assert.equal(summary.profile, "pi-default");
+	const parsed = JSON.parse(await readFile(join(directory, "pi-default.json"), "utf8"));
+	assert.equal(parsed.harness, "pi");
+	assert.equal(parsed.tier, "trusted-host");
+	assert.deepEqual(parsed.runtime, { mode: "direct", expectedVersion: "0.84.4" });
+	assert.deepEqual(parsed.route, { source: "explicit", provider: "provider-a", model: "model-a", reasoning: "max" });
+	collectStrings(parsed, (value) => assert.doesNotMatch(value, /(api[_-]?key|secret|password|bearer|sk-[a-z0-9]{8}|-----BEGIN)/i));
+});
+
+test("init-omp records paths and environment names without environment values", async () => {
+	const directory = await trackedMkdtemp(join(tmpdir(), "ox-driver-ox-route-omp-"));
+	const agentDirectory = join(directory, "agent");
+	const homeDirectory = join(directory, "home");
+	const result = await runScript([
+		"scripts/ox_route.mjs", "init-omp", "--launcher", "omp", "--provider", "provider-b",
+		"--model", "model-b", "--reasoning", "high", "--agent-dir", agentDirectory,
+		"--home-dir", homeDirectory, "--env", "PROVIDER_TOKEN", "--profile-dir", directory,
+	]);
+	const summary = JSON.parse(result.stdout);
+	assert.equal(summary.profile, "omp-default");
+	const parsed = JSON.parse(await readFile(join(directory, "omp-default.json"), "utf8"));
+	assert.equal(parsed.harness, "omp");
+	assert.equal(parsed.tier, "attested");
+	assert.deepEqual(parsed.runtime.environmentNames, ["PROVIDER_TOKEN"]);
+	assert.equal(JSON.stringify(parsed).includes(process.env.PROVIDER_TOKEN ?? "__missing__"), false);
 });

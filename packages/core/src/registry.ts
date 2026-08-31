@@ -15,6 +15,10 @@ export interface ApprovedAdapterBinding {
 }
 
 export const officialTargetAdapterBindings = Object.freeze([
+	Object.freeze({ adapterId: "pi-v1", harness: "pi" }),
+	Object.freeze({ adapterId: "omp-rpc-v2", harness: "omp" }),
+	Object.freeze({ adapterId: "acp-v1-quarantined", harness: "acp" }),
+	Object.freeze({ adapterId: "dsh-sdk-v1-quarantined", harness: "dsh" }),
 	Object.freeze({ adapterId: "opencode-v2", harness: "opencode" }),
 ] satisfies readonly ApprovedAdapterBinding[]);
 

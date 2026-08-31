@@ -1,0 +1,12 @@
+{
+  "name": "@ox-driver/adapter-dsh",
+  "version": "2.0.0-dev.0",
+  "private": true,
+  "type": "module",
+  "exports": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@ox-driver/adapter-probe-only": "2.0.0-dev.0",
+    "@ox-driver/core": "2.0.0-dev.0"
+  }
+}

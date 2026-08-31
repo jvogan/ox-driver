@@ -1,197 +1,281 @@
-# Ox Driver 2.0 OpenCode Preview
+# Ox Driver
 
-[![validate](https://github.com/jvogan/ox-driver/actions/workflows/validate.yml/badge.svg)](https://github.com/jvogan/ox-driver/actions/workflows/validate.yml)
+Ox Driver delegates repository writing and review to OpenCode, Pi, and OMP
+from a skill-loading host agent or terminal. It preserves the selected harness
+and route, can create managed Git worktrees for writers, and returns durable
+receipts for output, usage, reported cost, process cleanup, changed paths, and
+acceptance checks.
 
-Ox Driver runs repository tasks through an installed OpenCode CLI in separate
-managed Git worktrees. Each run produces a durable receipt containing the
-configured route, reported usage and cost, process cleanup, Git-visible
-changes, and acceptance-command results.
-
-Version 2.0.0-dev.0 supports OpenCode writers on macOS and Linux. You can run
-one task, compare two workers, run up to 32 independent lanes, retry incomplete
-lanes, export patches, and apply selected non-conflicting patches in a separate
-integration worktree. Ox Driver creates task and integration changes in
-separate managed worktrees. The worker retains the host access described in
-[Boundaries](#boundaries).
+OpenCode handles solo writing, direct children, pairs, and herds. Pi handles solo
+writing and read-only review. OMP handles attested solo read-only review on a
+qualified macOS arm64 route. A handoff runs an OpenCode writer, binds a Pi or
+OMP reviewer to the writer's Git-visible result, then runs controller-owned
+checks.
 
 ```mermaid
 flowchart LR
-    accTitle: Ox Driver single-task flow
-    accDescr: A host agent sends a bounded repository task to Ox Driver. Ox Driver supervises an OpenCode writer in a managed Git worktree, runs checks, reconciles changes, and returns a durable receipt.
+    accTitle: Ox Driver harness and receipt flow
+    accDescr: A host agent or terminal selects Ox Driver, which dispatches supported work to OpenCode, Pi, or OMP and returns durable receipts. ACP and DeepSeek Harness provide inspection only.
 
-    H["Host agent<br/>Codex, Claude Code, or another skill-loading agent"]
-    O1["Ox Driver<br/>preflight, launch, and process supervision"]
-    W["OpenCode writer<br/>managed Git worktree"]
-    O2["Ox Driver<br/>cleanup, checks, and change reconciliation"]
-    R["Receipt returned to the host<br/>route · usage · reported cost<br/>process · changed paths · checks"]
+    H["Host agent or terminal"] --> O["Ox Driver"]
+    O --> OC["OpenCode<br/>solo · direct children · pair · herd"]
+    O --> PI["Pi<br/>solo writer · read-only reviewer"]
+    O --> OM["OMP<br/>attested read-only reviewer"]
+    O -. "zero-model inspection" .-> Q["ACP · DeepSeek Harness<br/>dispatch blocked"]
 
-    H -->|"bounded repository task"| O1
-    O1 -->|"pinned provider, model, and reasoning"| W
-    W -->|"structured result and Git-visible changes"| O2
-    O2 --> R
+    OC --> W["Managed Git worktrees<br/>change reconciliation · checks"]
+    W --> R["Durable receipts"]
+    PI --> R
+    OM --> R
 ```
 
-## Source-preview archive
+## Harness support
 
-This release is a deterministic source archive with a SHA-256 sidecar. No npm
-package or in-place installer is provided. Verify the sidecar, extract the
-archive, and enter the extracted directory:
+| Harness | Dispatchable work | Composition | Boundary |
+| --- | --- | --- | --- |
+| OpenCode | One-writer repository tasks | Solo, receipt-aware direct children, pair, and herd | Trusted host. Managed worktrees separate Git changes but provide no OS sandbox. |
+| Pi | Solo writing or solo read-only review | Independent herd review lane; reviewer in an OpenCode handoff | Trusted host. Requires an installed route that passes `doctor pi`. Ox-managed Pi children and teams are unavailable. |
+| OMP | Solo read-only review | Reviewer in an OpenCode handoff | Attested. Requires the qualified macOS arm64 route. Writing and child agents are unavailable. |
+| ACP | None | None | Zero-model inspection only. Preflight rejects every task dispatch. |
+| DeepSeek Harness | None | None | Artifact inspection only. Preflight rejects every task dispatch. |
 
-```bash
-# macOS
-shasum -a 256 -c ox-driver-opencode-source-preview-2026-08-30.tar.gz.sha256
-# GNU/Linux
-sha256sum -c ox-driver-opencode-source-preview-2026-08-30.tar.gz.sha256
+`doctor`, validation, tests, and dry runs make no model request. ACP and
+DeepSeek Harness never receive a task prompt through Ox Driver.
 
-tar -xzf ox-driver-opencode-source-preview-2026-08-30.tar.gz
-cd ox-driver-opencode-source-preview
-```
+## Requirements
 
-The checksum detects corruption and binds the archive bytes to its published
-digest. It cannot establish publisher identity if an archive and sidecar are
-replaced together. Obtain the digest through a channel you trust.
+- Node.js 22.20 or later and npm
+- Git
+- An installed harness for each selected dispatch route
+- Harness authentication configured outside route profiles
 
-## Quickstart
+OpenCode writer tests run on macOS and Linux. OMP dispatch requires the
+qualified macOS arm64 route. A Pi route must pass its zero-model doctor on the
+machine that runs it.
 
-Requirements: Node.js 22.20 or later, Git, and an installed OpenCode launcher.
-The launcher must already be authenticated. `npm ci` needs registry access or
-matching packages in the local npm cache.
+## Install and build
 
-Inspect and install the bundled skill for Codex and Claude Code with:
-
-```bash
-npm_config_ignore_scripts=true npx --yes skills@1.5.23 add . --list
-npm_config_ignore_scripts=true npx --yes skills@1.5.23 add . \
-  --global --copy --skill ox-driver --agent codex claude-code
-```
-
-Keep the extracted release directory available. The skill runs controller
-scripts from this tree.
+Review the source tree, then install exact dependencies without lifecycle
+scripts:
 
 ```bash
 npm ci --ignore-scripts
 npm run build
+```
 
+Inspect the bundled skill before installing it through a host agent:
+
+```bash
+npm_config_ignore_scripts=true npx --yes skills@1.5.23 add . --list
+```
+
+The skill invokes scripts from this source tree. Keep the tree available while
+using the skill.
+
+## Configure routes
+
+Each dispatch route names one launcher, provider, model, and reasoning effort.
+The initializer writes route identity and optional executable checks. It never
+writes authentication values.
+
+Set values that the installed harness can reach:
+
+```bash
+provider_id="your-provider"
+model_id="your-model"
+reasoning_level="your-reasoning-level"
+```
+
+Create an OpenCode route:
+
+```bash
 node scripts/ox_route.mjs init-opencode \
-  --launcher opencode --provider openrouter \
-  --model z-ai/glm-5.3-flash --reasoning max
-node scripts/ox_route.mjs check
-npm exec -- ox-driver-opencode doctor
+  --launcher opencode \
+  --provider "$provider_id" \
+  --model "$model_id" \
+  --reasoning "$reasoning_level"
+node scripts/ox_route.mjs check --id opencode-default
+```
 
+Create a direct Pi route:
+
+```bash
+node scripts/ox_route.mjs init-pi \
+  --launcher pi \
+  --provider "$provider_id" \
+  --model "$model_id" \
+  --reasoning "$reasoning_level"
+node scripts/ox_route.mjs check --id pi-default
+```
+
+Create an OMP route. The initializer creates the isolated agent and home
+directories when they do not exist:
+
+```bash
+node scripts/ox_route.mjs init-omp \
+  --launcher omp \
+  --provider "$provider_id" \
+  --model "$model_id" \
+  --reasoning "$reasoning_level" \
+  --agent-dir /absolute/path/to/omp-agent \
+  --home-dir /absolute/path/to/omp-home
+node scripts/ox_route.mjs check --id omp-default
+```
+
+Pass `--expected-version` or `--expected-sha256` when a route requires an exact
+launcher. OMP accepts repeated `--env NAME` arguments for environment-variable
+names admitted to its process. The profile records names and never records
+their values.
+
+Check every configured harness without making a model request:
+
+```bash
+node packages/cli/dist/main.js doctor --all
+```
+
+Read [OpenCode routes and work](public-docs/opencode.md),
+[Pi routes and work](public-docs/pi.md), and
+[OMP routes and review](public-docs/omp.md) before the first paid dispatch.
+
+## Run an OpenCode writer
+
+```bash
 npm exec -- ox-driver-opencode task /absolute/path/to/repository \
-  "Implement the task, verify it, and report what changed" \
+  "Implement one focused change and report the result" \
+  --route opencode-default \
   --owned . \
   --check "npm test"
 ```
 
-The example requires the installed launcher to reach
-`openrouter/z-ai/glm-5.3-flash` with variant `max`. Choose another provider,
-model, or reasoning value when your launcher uses a different route. `check`
-validates the profile file. `doctor` checks the launcher and selected profile
-without making a model call. Authentication and model availability are tested
-by the first task dispatch, which may incur provider cost.
+The command creates a detached managed worktree from `HEAD`, runs one writer,
+then records route, usage, reported cost, process cleanup, Git-visible changes,
+and acceptance results. It preserves the worktree for inspection.
 
-The task command prints the task, worktree, and run IDs. Inspect the result and
-its managed worktree with:
+Use `--no-check` only when no executable acceptance command applies. Repeat
+`--owned`, `--exclude`, and `--check` to state a narrower contract.
+
+## Run Pi
+
+Run a solo Pi writer with at least one owned path:
 
 ```bash
-node scripts/ox_orchestration.mjs report TASK_ID
-node scripts/ox_workspace.mjs inspect WORKTREE_ID
+node scripts/ox_pi.mjs /absolute/path/to/repository \
+  "Implement one focused change and report the result" \
+  --route pi-default \
+  --writer \
+  --owned . \
+  --check "npm test"
 ```
 
-The managed worktree starts from `HEAD` unless you pass `--ref`. Uncommitted
-and ignored files from the source checkout are absent. Choose an acceptance
-command that works in a fresh worktree, or tell the worker to install the
-required dependencies. Use `--no-check` only when the task has no executable
-acceptance command.
+Run a solo read-only Pi review:
 
-### Preserve the selected route and worker capacity
-
-Preserve the selected launcher, provider, model, reasoning effort, agent
-profile, scope, checks, timeout, and reported-cost target. A retry uses the
-recorded route-profile digest and fails if that profile changed. Create another
-profile with `--id` and select it with `--route`; keep profiles referenced by
-active or retryable runs unchanged.
-
-Preserve the worker's model turns, reasoning, tools, child capacity, context,
-output, and wrap-up time. Add or lower a limit only when the user requests it
-or a controller policy requires it. Task, pair, and herd lanes default to 3,600
-seconds. Collect every independent lane result unless the user requests
-fail-fast.
-
-## Pair, herd, retry, and integration
-
-A pair runs two independent OpenCode lanes. A herd runs two to 32 lanes. Each
-lane uses a separate managed worktree, and Ox Driver stores every child run ID
-in a finalized aggregate receipt.
-
-```mermaid
-flowchart TD
-    accTitle: Ox Driver pair, herd, retry, and integration lifecycle
-    accDescr: Independent OpenCode lanes create child and aggregate receipts. The host can inspect results, retry an incomplete lane, export a patch, or apply selected non-conflicting lanes in a fresh integration worktree.
-
-    P["Pair or herd request"]
-    L["Independent OpenCode lanes<br/>one managed worktree per lane"]
-    C["Child receipts"]
-    A["Aggregate receipt"]
-    Q["Inspect, report, or archive"]
-    R["Retry an incomplete lane<br/>same worktree"]
-    N["New aggregate receipt<br/>attempt lineage retained"]
-    I["Integration proposal<br/>patches, overlaps, conflicts, apply order"]
-    E["Export a selected patch"]
-    W["Apply selected non-conflicting lanes<br/>fresh integration worktree"]
-    K["Controller-owned checks"]
-    H["Host review"]
-
-    P --> L
-    L --> C
-    C --> A
-    A --> Q
-    A -->|"incomplete lane"| R
-    R --> N
-    A -->|"completed lanes"| I
-    N -->|"completed lanes"| I
-    I --> E
-    I --> W
-    W --> K
-    K --> H
+```bash
+node scripts/ox_pi.mjs /absolute/path/to/repository \
+  "Review this repository for correctness risks" \
+  --route pi-default
 ```
 
-`apply` leaves the source working tree and refs unchanged. Read
-[`skills/ox-driver/SKILL.md`](skills/ox-driver/SKILL.md) for task, pair, herd,
-retry, report, archive, export, apply, cancel, and recovery commands.
+Ox Driver supports Pi only in solo mode. The writer receives the installed
+launcher's normal tool surface. The reviewer receives the controller's
+read-only tool policy. Both preserve the selected provider, model, reasoning
+effort, and configured network behavior.
 
-## Migrating from earlier versions
+## Run an OMP review
 
-Version 2.0.0-dev.0 replaces the earlier controller workflow. Read
-[MIGRATION.md](MIGRATION.md) before removing any files installed
-by an earlier release.
+```bash
+node packages/cli/dist/main.js omp-review \
+  /absolute/path/to/repository \
+  "Review this repository for correctness risks" \
+  --route omp-default \
+  --no-check
+```
 
-## Boundaries
+OMP review is ephemeral, solo, and read-only. The qualified route verifies the
+launcher, route, isolated runtime directories, tool inventory, process
+containment, and unchanged Git-visible workspace.
 
-OpenCode receives the filesystem and network access of the installed launcher
-process. A managed worktree separates Git changes; the launcher retains access
-to other host paths and credentials. Run Ox Driver only where the worker may
-use the available files, credentials, and network access.
+## Run a checked handoff
 
-`--owned` and `--exclude` classify Git-visible changes after execution. They do
-not prevent reads or writes. A change outside the permitted scope fails receipt
-reconciliation.
+Use Pi to review completed OpenCode work:
 
-The one-writer profile policy rejects child profiles that declare direct
-write, edit, or patch tools. A shell-capable child may still change files. The
-receipt reconciles the terminal Git state and does not attribute each path to a
-specific agent.
+```bash
+node packages/cli/dist/main.js handoff \
+  /absolute/path/to/repository \
+  "Implement one focused change" \
+  --owned . \
+  --builder-route opencode-default \
+  --reviewer pi \
+  --reviewer-route pi-default \
+  --check "npm test"
+```
 
-`--cost-ceiling` evaluates reported cost after execution. It cannot stop
-provider billing. Configure a provider-side or launcher-side limit when a run
-requires a hard spending cap.
+Select `--reviewer omp --reviewer-route omp-default` for OMP. The controller
+preflights both routes, records the writer's Git-visible digest, admits the
+reviewer only for that digest, then runs acceptance checks. Resume an
+interrupted or failed reviewer stage with the checkpoint identifier printed by
+the original command:
 
-Ox Driver stores objectives, absolute paths, terminal output, events, receipts,
-check results, patches, orchestration records, and managed worktrees under the
-configured state roots. Use `ox_workspace.mjs list`, `inspect`, and `remove` to
-manage worktrees. Other records remain until the operator removes the selected
-state directory according to their retention policy.
+```bash
+node packages/cli/dist/main.js handoff resume HANDOFF_CHECKPOINT_ID
+```
 
-Licensed under MIT; see
-[`skills/ox-driver/LICENSE`](skills/ox-driver/LICENSE).
+Read [receipts and handoffs](public-docs/receipts-and-handoffs.md) for ordering,
+resume, cancellation, and receipt fields.
+
+## Run a pair or herd
+
+Create one managed worktree for each OpenCode writer, then run independent
+lanes:
+
+```bash
+node scripts/ox_workspace.mjs create /absolute/path/to/repository
+node scripts/ox_workspace.mjs create /absolute/path/to/repository
+
+node scripts/ox_pair.mjs "Implement two independent approaches" \
+  --worker /absolute/path/to/worktree-a \
+  --worker /absolute/path/to/worktree-b \
+  --check "npm test"
+```
+
+`ox_herd.mjs` accepts two to 32 lanes and an optional concurrency bound. A lane
+plan may combine OpenCode writers with an independent Pi read-only review lane.
+Use handoff when the reviewer must inspect completed writer changes.
+
+Pair and herd collect every independent lane result by default. Select
+`--failure-policy fail-fast` only when the remaining lanes must stop after one
+failure. Ox Driver never merges pair or herd work automatically.
+
+## Inspect, retry, and integrate
+
+```bash
+node scripts/ox_orchestration.mjs list
+node scripts/ox_orchestration.mjs inspect ORCHESTRATION_ID
+node scripts/ox_orchestration.mjs report ORCHESTRATION_ID
+node scripts/ox_orchestration.mjs retry ORCHESTRATION_ID --lane LANE_ID
+node scripts/ox_integrate.mjs propose ORCHESTRATION_ID
+```
+
+`retry` preserves the recorded route-profile digest, agent, scope, checks,
+timeout, cost target, and worktree. `propose` reports patch sources, overlaps,
+conflicts, and apply order without changing a repository. An explicit `apply`
+creates a separate integration worktree and runs controller-owned checks.
+
+## Operating boundaries
+
+- Trusted-host OpenCode and Pi receive the host access available to their
+  installed launchers. Use repositories and worktrees appropriate for that
+  access.
+- Managed worktrees separate Git changes. They do not restrict filesystem or
+  network access.
+- `--owned` and `--exclude` classify Git-visible changes after execution. A
+  change outside the admitted scope fails reconciliation.
+- Trusted-host cost targets evaluate reported cost after execution. Configure
+  a provider or launcher limit when a task requires a hard spending cap.
+- OMP claims only the qualified read-only macOS arm64 boundary.
+- Ox Driver stores objectives, absolute paths, output, events, receipts,
+  patches, and managed worktrees under its configured state roots.
+- Keep authentication values out of route profiles, tasks, prompts, receipts,
+  repositories, and documentation.
+
+Inspect writer diffs and receipts before integration. Read
+[Security](SECURITY.md) and [Contributing](CONTRIBUTING.md). Licensed under MIT.

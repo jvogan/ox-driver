@@ -4,7 +4,6 @@
   "private": true,
   "type": "module",
   "bin": {
-    "ox-driver": "bin/ox-driver.mjs",
     "ox-driver-opencode": "bin/ox-driver.mjs"
   },
   "dependencies": {

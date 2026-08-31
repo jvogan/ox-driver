@@ -1,5 +1,5 @@
 {
-  "name": "ox-driver-opencode-preview",
+  "name": "ox-driver",
   "version": "2.0.0-dev.0",
   "private": true,
   "license": "MIT",
@@ -9,12 +9,18 @@
   },
   "workspaces": [
     "packages/core",
+    "packages/cli",
+    "packages/opencode-cli",
     "packages/adapters/opencode",
-    "packages/opencode-cli"
+    "packages/adapters/pi",
+    "packages/adapters/omp",
+    "packages/adapters/acp",
+    "packages/adapters/dsh",
+    "packages/adapters/probe-only"
   ],
   "scripts": {
     "build": "tsc -b",
-    "test": "npm run build && node --test tests/controller/opencode-public-cli.test.mjs tests/controller/opencode-task-workflow.test.mjs tests/controller/opencode-profile-adapter.test.mjs tests/controller/ox-route-script.test.mjs tests/controller/orchestration-store.test.mjs tests/controller/orchestration-plan.test.mjs tests/controller/ox-pair-script.test.mjs tests/controller/ox-herd-script.test.mjs tests/controller/ox-orchestration-script.test.mjs tests/controller/orchestration-retry.test.mjs tests/controller/ox-integrate-script.test.mjs"
+    "test": "npm run build && node --test tests/public/*.test.mjs tests/controller/opencode-task-workflow.test.mjs tests/controller/opencode-profile-adapter.test.mjs tests/controller/ox-route-script.test.mjs tests/controller/ox-pi-script.test.mjs tests/controller/omp-adapter.test.mjs"
   },
   "devDependencies": {
     "@types/node": "22.20.1",
