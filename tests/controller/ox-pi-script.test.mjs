@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -24,13 +25,20 @@ async function invoke(args) {
 
 test("pi lane runner fails closed on writer-only or wrong-route arguments before any dispatch", async () => {
 	const worker = await trackedMkdtemp(join(tmpdir(), "ox-pi-worker-"));
+	const profiles = await trackedMkdtemp(join(tmpdir(), "ox-pi-route-"));
+	await writeFile(join(profiles, "fixture-opencode.json"), JSON.stringify({
+		version: 1, id: "fixture-opencode", status: "active", harness: "opencode", tier: "trusted-host",
+		launcher: { command: "fixture-opencode", versionArgs: ["--version"] },
+		route: { source: "explicit", provider: "fixture-provider", model: "fixture-model", reasoning: "max" },
+		pricingPolicy: "report-only", credentialPolicy: "from-installed-harness",
+	}));
 
 	const agent = await invoke([worker, "review the lane", "--agent", "custom"]);
 	assert.equal(agent.code, 1);
 	assert.match(agent.stderr, /Pi lane does not accept --agent/);
 	assert.equal(agent.stderr.includes("OX_DRIVER_RUN_ID"), false);
 
-	const route = await invoke([worker, "review the lane", "--route", "opencode-default"]);
+	const route = await invoke([worker, "review the lane", "--route", "fixture-opencode", "--profile-dir", profiles]);
 	assert.equal(route.code, 1);
 	assert.match(route.stderr, /targets opencode, not pi/);
 	assert.equal(route.stderr.includes("OX_DRIVER_RUN_ID"), false);

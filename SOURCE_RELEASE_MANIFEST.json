@@ -54,8 +54,8 @@
   "files": [
     {
       "path": ".github/workflows/validate.yml",
-      "bytes": 1410,
-      "sha256": "55b74689157a71c6057257815b55ae2646dff68188abb78f04e7b9ec6f4bb6ae"
+      "bytes": 1433,
+      "sha256": "103c9ddf130ba8b1c791bf340bdcc35dc216285842e849255ec569ac941ae6e7"
     },
     {
       "path": ".gitignore",
@@ -654,8 +654,8 @@
     },
     {
       "path": "tests/controller/ox-pi-script.test.mjs",
-      "bytes": 3081,
-      "sha256": "9433effbd6e8b687c86350067364978d681879bd2bca98152876791b2aaf3743"
+      "bytes": 3660,
+      "sha256": "745bf4a31834b9f82bf7c95504802a25359612b989792ed8cd87ee6e97178cd7"
     },
     {
       "path": "tests/controller/ox-route-script.test.mjs",
