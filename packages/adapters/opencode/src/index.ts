@@ -73,8 +73,9 @@ function assertProfile(profile: ResolvedRouteProfile): void {
 	if (profile.tier !== "trusted-host") throw new Error(`OpenCode route profile ${profile.id} must use trusted-host tier`);
 }
 
-async function probeAgentProfile(launcher: string, profile: string): Promise<JsonObject> {
+async function probeAgentProfile(launcher: string, profile: string, expectedSha256?: string): Promise<JsonObject> {
 	const executable = await resolveExecutable(launcher);
+	await verifyDigest(executable, expectedSha256);
 	const result = await execFileAsync(executable, ["debug", "agent", profile], {
 		timeout: PROBE_TIMEOUT_MILLISECONDS,
 		maxBuffer: PROBE_OUTPUT_LIMIT,
@@ -110,6 +111,29 @@ async function sha256(path: string): Promise<string> {
 		stream.once("error", rejectHash);
 		stream.once("end", () => resolveHash(hash.digest("hex")));
 	});
+}
+
+async function verifyDigest(executable: string, expectedSha256?: string): Promise<string> {
+	const digest = await sha256(executable);
+	if (expectedSha256 && digest !== expectedSha256) throw new Error("OpenCode launcher digest differs from the route profile or qualified launcher");
+	return digest;
+}
+
+async function inspectLauncher(command: string, profile: ResolvedRouteProfile, qualifiedDigest?: string): Promise<{ executable: string; binarySha256: string; harnessVersion: string }> {
+	const executable = await resolveExecutable(command);
+	const binarySha256 = await verifyDigest(executable, profile.runtime?.expectedSha256);
+	if (qualifiedDigest && binarySha256 !== qualifiedDigest) throw new Error("OpenCode launcher evidence changed after preflight");
+	const version = await execFileAsync(executable, profile.launcher.versionArgs, {
+		timeout: PROBE_TIMEOUT_MILLISECONDS,
+		maxBuffer: PROBE_OUTPUT_LIMIT,
+	});
+	const harnessVersion = `${version.stdout}\n${version.stderr}`.trim();
+	if (!harnessVersion) throw new Error("OpenCode version probe returned no version");
+	if (profile.runtime?.expectedVersion && !harnessVersion.includes(profile.runtime.expectedVersion)) {
+		throw new Error(`OpenCode version output did not contain ${profile.runtime.expectedVersion}`);
+	}
+	await verifyDigest(executable, binarySha256);
+	return { executable, binarySha256, harnessVersion };
 }
 
 function appendBounded(current: Buffer, chunk: Buffer): { bytes: Buffer; truncated: boolean } {
@@ -359,20 +383,15 @@ export class OpenCodeAdapter implements HarnessAdapter {
 
 	async doctor(): Promise<HarnessCapabilities> {
 		try {
-			const executable = await resolveExecutable(this.#launcher);
-			const version = await execFileAsync(executable, this.#profile.launcher.versionArgs, {
-				timeout: PROBE_TIMEOUT_MILLISECONDS,
-				maxBuffer: PROBE_OUTPUT_LIMIT,
-			});
+			const { executable, binarySha256, harnessVersion } = await inspectLauncher(this.#launcher, this.#profile);
 			let doctor;
 			if (this.#profile.launcher.doctor) {
+				await verifyDigest(executable, binarySha256);
 				doctor = await execFileAsync(executable, this.#profile.launcher.doctor.args, {
 					timeout: PROBE_TIMEOUT_MILLISECONDS,
 					maxBuffer: PROBE_OUTPUT_LIMIT,
 				});
 			}
-			const harnessVersion = `${version.stdout}\n${version.stderr}`.trim();
-			if (!harnessVersion) throw new Error("OpenCode version probe returned no version");
 			if (doctor && this.#profile.launcher.doctor?.requiredText) {
 				const output = `${doctor.stdout}\n${doctor.stderr}`;
 				for (const required of this.#profile.launcher.doctor.requiredText) {
@@ -381,6 +400,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
 			}
 			let delegationQualified = false;
 			try {
+				await verifyDigest(executable, binarySha256);
 				const databaseProbe = await execFileAsync(executable, ["db", delegationProbeQuery(), "--format", "json"], {
 					timeout: PROBE_TIMEOUT_MILLISECONDS,
 					maxBuffer: PROBE_OUTPUT_LIMIT,
@@ -393,6 +413,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
 			} catch {
 				delegationQualified = false;
 			}
+			await verifyDigest(executable, binarySha256);
 			const configuredRoute = this.#profile.route.source === "explicit"
 				? { provider: this.#profile.route.provider, model: this.#profile.route.model, reasoning: this.#profile.route.reasoning }
 				: undefined;
@@ -404,7 +425,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
 				compatibility: executionQualified ? "verified" : "degraded",
 				available: true,
 				executable,
-				binarySha256: await sha256(executable),
+				binarySha256,
 				routeProfileSha256: this.#profile.sha256,
 				harnessVersion,
 				...(configuredRoute ? { configuredRoute } : {}),
@@ -494,9 +515,9 @@ export class OpenCodeAdapter implements HarnessAdapter {
 			}
 			if (!agent) {
 				issues.push({ severity: "error", code: "OPENCODE_PRIMARY_AGENT_REQUIRED", message: "OpenCode flat runs require an exact primary agent profile" });
-			} else {
+			} else if (doctor.probe?.executionQualified === true) {
 				try {
-					const primary = await probeAgentProfile(this.#launcher, agent);
+					const primary = await probeAgentProfile(this.#launcher, agent, doctor.binarySha256 ?? this.#profile.runtime?.expectedSha256);
 					if (!isObject(primary.tools) || primary.tools.task !== true) {
 						issues.push({
 							severity: "error",
@@ -513,7 +534,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
 				}
 				for (const childProfile of childPolicy?.allowedProfiles ?? []) {
 					try {
-						const child = await probeAgentProfile(this.#launcher, childProfile);
+						const child = await probeAgentProfile(this.#launcher, childProfile, doctor.binarySha256 ?? this.#profile.runtime?.expectedSha256);
 						if (typeof child.variant === "string" && configuredRoute && child.variant !== configuredRoute.reasoning) {
 							issues.push({ severity: "error", code: "OPENCODE_CHILD_REASONING_DRIFT", message: `OpenCode child agent ${childProfile} selects reasoning ${child.variant} instead of ${configuredRoute.reasoning}` });
 						}
@@ -551,6 +572,10 @@ export class OpenCodeAdapter implements HarnessAdapter {
 		if (spec.tier !== "trusted-host" || spec.routeProfile !== this.#profile.id || this.#profile.route.source !== "explicit") {
 			throw new Error("OpenCode run is outside its resolved trusted-host route profile");
 		}
+		const before = await inspectLauncher(this.#launcher, this.#profile, context.doctor.binarySha256);
+		if (before.executable !== context.doctor.executable || before.binarySha256 !== context.doctor.binarySha256 || before.harnessVersion !== context.doctor.harnessVersion) {
+			throw new Error("OpenCode launcher or version evidence changed after preflight");
+		}
 		const route = {
 			provider: this.#profile.route.provider,
 			model: this.#profile.route.model,
@@ -585,7 +610,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
 			route,
 		});
 		const processStartedAt = Date.now();
-		const result = await runTrustedOpenCode(this.#launcher, args, spec.task.cwd, context, spec.execution.topology === "flat");
+		const result = await runTrustedOpenCode(before.executable, args, spec.task.cwd, context, spec.execution.topology === "flat");
 		const processFinishedAt = Date.now();
 		const notices = ["Trusted-host OpenCode uses shared configuration, normal tool permissions, and automatic permission handling."];
 		let status: AdapterRunResult["status"] = context.signal.aborted ? "cancelled" : "completed";
@@ -613,8 +638,10 @@ export class OpenCodeAdapter implements HarnessAdapter {
 				if (!result.sessionId) throw new Error("OpenCode event stream omitted the root session id");
 				if (result.reportedCostUsdMicros === undefined) throw new Error("OpenCode event stream omitted complete primary cost telemetry");
 				const query = delegationEvidenceQuery(result.sessionId, spec.task.objective);
-				const first = await runTrustedProcess(this.#launcher, ["db", query, "--format", "json"], spec.task.cwd, context, "opencode-delegation-evidence-1");
-				const second = await runTrustedProcess(this.#launcher, ["db", query, "--format", "json"], spec.task.cwd, context, "opencode-delegation-evidence-2");
+				await verifyDigest(before.executable, before.binarySha256);
+				const first = await runTrustedProcess(before.executable, ["db", query, "--format", "json"], spec.task.cwd, context, "opencode-delegation-evidence-1");
+				await verifyDigest(before.executable, before.binarySha256);
+				const second = await runTrustedProcess(before.executable, ["db", query, "--format", "json"], spec.task.cwd, context, "opencode-delegation-evidence-2");
 				for (const [label, evidence] of [["first", first], ["second", second]] as const) {
 					if (evidence.exitCode !== 0 || evidence.stdoutTruncated || evidence.stderrTruncated || evidence.backgroundProcessesDetected) {
 						throw new Error(`${label} OpenCode DB evidence read was incomplete`);
@@ -657,6 +684,16 @@ export class OpenCodeAdapter implements HarnessAdapter {
 				status = "failed";
 				notices.push(`OpenCode child receipt reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
 			}
+		}
+		try {
+			await verifyDigest(before.executable, before.binarySha256);
+			const after = await inspectLauncher(this.#launcher, this.#profile);
+			if (after.executable !== before.executable || after.binarySha256 !== before.binarySha256 || after.harnessVersion !== before.harnessVersion) {
+				throw new Error("OpenCode launcher or version evidence changed during execution");
+			}
+		} catch (error) {
+			status = "failed";
+			notices.push(error instanceof Error ? error.message : String(error));
 		}
 		return {
 			status,

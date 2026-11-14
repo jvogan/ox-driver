@@ -2,13 +2,13 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import {
-	chmod,
+	link,
 	lstat,
 	mkdir,
 	open,
 	readdir,
 	realpath,
-	rename,
+	rmdir,
 	unlink,
 } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -163,13 +163,16 @@ async function writeRecord(path: string, record: ManagedWorktreeRecord): Promise
 	const temporary = `${path}.pending-${randomUUID()}`;
 	const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
 	try {
-		await handle.writeFile(`${JSON.stringify(record, null, 2)}\n`, "utf8");
-		await handle.sync();
+		try {
+			await handle.writeFile(`${JSON.stringify(record, null, 2)}\n`, "utf8");
+			await handle.sync();
+		} finally {
+			await handle.close();
+		}
+		await link(temporary, path);
 	} finally {
-		await handle.close();
+		await unlink(temporary).catch(() => undefined);
 	}
-	await rename(temporary, path);
-	await chmod(path, 0o600);
 }
 
 function registeredWorktrees(output: string): Map<string, string> {
@@ -242,11 +245,40 @@ export class ManagedWorktreeStore {
 			baseCommit,
 			createdAt: new Date().toISOString(),
 		};
+		// Reserve the record before rollback can run. A duplicate ID belongs to
+		// the existing allocation, including any uncommitted work it contains.
+		await writeRecord(recordPath, record);
+		let createdDirectory = false;
+		let directoryIdentity: { dev: number; ino: number } | undefined;
+		const ownsDirectory = async (): Promise<boolean> => {
+			if (!directoryIdentity) return false;
+			const current = await lstat(path).catch(() => undefined);
+			return current !== undefined && current.isDirectory() && !current.isSymbolicLink()
+				&& current.dev === directoryIdentity.dev && current.ino === directoryIdentity.ino;
+		};
 		try {
-			await writeRecord(recordPath, record);
+			await mkdir(path, { mode: 0o700 });
+			createdDirectory = true;
+			directoryIdentity = await lstat(path);
 			await runGit(roots.root, source, ["worktree", "add", "--detach", path, baseCommit]);
 		} catch (error) {
-			await runGit(roots.root, source, ["worktree", "remove", "--force", path]).catch(() => undefined);
+			if (createdDirectory) {
+				if (await ownsDirectory()) {
+					await runGit(roots.root, source, ["worktree", "remove", "--force", path]).catch(() => undefined);
+					if (await ownsDirectory()) await rmdir(path).catch(() => undefined);
+				}
+				let pathAbsent = false;
+				try { await lstat(path); } catch (inspectionError) {
+					pathAbsent = (inspectionError as NodeJS.ErrnoException).code === "ENOENT";
+				}
+				let registrationAbsent = false;
+				try {
+					registrationAbsent = !registeredWorktrees(await runGit(roots.root, source, ["worktree", "list", "--porcelain"])).has(path);
+				} catch { /* Keep the allocation record when registration cleanup cannot be verified. */ }
+				if (!pathAbsent || !registrationAbsent) {
+					throw new Error(`managed worktree ${id} allocation failed; cleanup is incomplete and its record remains at ${recordPath}`, { cause: error });
+				}
+			}
 			await unlink(recordPath).catch(() => undefined);
 			throw error;
 		}

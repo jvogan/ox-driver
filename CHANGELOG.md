@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- List configured routes and launcher pins without executing launchers.
+- Validate team plans without allocating workers or making model requests.
+- Combine latest lane results, attempt history, and cumulative cost evidence
+  across a selected retry chain.
+- Save integration receipts with selected runs, patch hashes, check results,
+  cleanup evidence, and the final workspace digest.
+
+### Fixed
+
+- Enforce OpenCode launcher version and digest pins.
+- Inspect each harness independently of unrelated route configuration.
+- Replace route profiles atomically and preserve symlink targets.
+- Preserve existing worktrees and retain records after incomplete rollback.
+- Retain recovery holds until process-tree cleanup is verified.
+- Reap acceptance and integration descendants on timeout and cancellation.
+- Align route and orchestration schemas with runtime admission rules.
+
 ## 2.0.0-dev.0
 
 ### Added

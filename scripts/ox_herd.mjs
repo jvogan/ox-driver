@@ -19,6 +19,8 @@ import {
 	validateOrchestrationPlan,
 } from "../packages/core/dist/index.js";
 import { OrchestrationReceiptStore } from "../packages/core/dist/orchestration-store.js";
+import { loadRouteProfile } from "../packages/core/dist/route-profiles.js";
+import { resolveRouteProfile } from "../packages/cli/dist/runtime.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CONTROLLER_CLI = resolve(ROOT, "packages", "cli", "dist", "main.js");
@@ -48,6 +50,7 @@ function parse(args) {
 	let agent;
 	let laneSpec;
 	let noCheck = false;
+	let dryRun = false;
 	let failurePolicy = "collect";
 	let timeoutSeconds = 3_600;
 	let ceilingUsdMicros = 250_000;
@@ -60,6 +63,7 @@ function parse(args) {
 		else if (argument === "--role") roles.push(args[++index]?.trim() || fail("--role requires a name"));
 		else if (argument === "--check") checks.push(args[++index]?.trim() || fail("--check requires a command"));
 		else if (argument === "--no-check") noCheck = true;
+		else if (argument === "--dry-run") dryRun = true;
 		else if (argument === "--owned") ownedPaths.push(relativeScope(args[++index], "--owned"));
 		else if (argument === "--exclude") excludedPaths.push(relativeScope(args[++index], "--exclude"));
 		else if (argument === "--route") route = args[++index]?.trim() || fail("--route requires a profile id");
@@ -122,6 +126,7 @@ function parse(args) {
 		roles,
 		checks,
 		noCheck,
+		dryRun,
 		failurePolicy,
 		ownedPaths,
 		excludedPaths,
@@ -398,7 +403,7 @@ async function main() {
 			}
 		}
 	}
-	const workerIdentities = await Promise.all(workers.map(discoverWorkerIdentity));
+	const workerIdentities = options.dryRun ? workers.map(() => ({})) : await Promise.all(workers.map(discoverWorkerIdentity));
 	const effectivePlan = validateEffectiveRetryPlan({
 		version: 1,
 		lanes: lanes.map((lane, index) => ({
@@ -422,6 +427,30 @@ async function main() {
 		})),
 	});
 	const effectivePlanSha256 = effectiveRetryPlanSha256(effectivePlan);
+	if (options.dryRun) {
+		const routes = await Promise.all(effectivePlan.lanes.map(async (lane) => {
+			const expectedTier = lane.harness === "omp" ? "attested" : "trusted-host";
+			const profile = options.profileDirectory
+				? await loadRouteProfile(options.profileDirectory, lane.route, { expectedHarness: lane.harness, expectedTier })
+				: await resolveRouteProfile(lane.route, { expectedHarness: lane.harness, expectedTier });
+			if (profile.status !== "active") fail(`lane ${lane.id} requires an active route profile`);
+			const agent = lane.agent ?? profile.agent?.defaultProfile;
+			if (agent && profile.agent?.allowedProfiles && !profile.agent.allowedProfiles.includes(agent)) {
+				fail(`lane ${lane.id} selects an agent outside its route profile allowlist`);
+			}
+			return { laneId: lane.id, id: profile.id, sha256: profile.sha256, harness: profile.harness, tier: profile.tier, launcher: profile.launcher, route: profile.route, ...(profile.agent ? { agent: profile.agent } : {}), ...(profile.runtime ? { runtime: profile.runtime } : {}) };
+		}));
+		const remaining = new Set(effectivePlan.lanes.map((lane) => lane.id));
+		const dependencyOrder = [];
+		while (remaining.size > 0) {
+			const ready = effectivePlan.lanes.filter((lane) => remaining.has(lane.id) && (lane.dependsOn ?? []).every((id) => !remaining.has(id))).map((lane) => lane.id);
+			if (ready.length === 0) fail("team dependencies cannot be ordered");
+			dependencyOrder.push(ready);
+			for (const id of ready) remaining.delete(id);
+		}
+		process.stdout.write(`${JSON.stringify({ version: 1, kind: "team-plan-validation", valid: true, modelCalls: 0, allocated: false, concurrency, failurePolicy: options.failurePolicy, effectivePlan, effectivePlanSha256, dependencyOrder, routes, runners: runnerRecords.map(({ harness, identity }) => ({ harness, ...identity })) }, null, 2)}\n`);
+		return;
+	}
 	const orchestrationStore = new OrchestrationReceiptStore();
 	const allocation = await orchestrationStore.allocate();
 	process.stderr.write(`OX_DRIVER_ORCHESTRATION_ID=${allocation.orchestrationId}\n`);

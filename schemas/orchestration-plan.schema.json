@@ -87,6 +87,11 @@
           "then": { "properties": { "childAgents": { "maxItems": 0 } } }
         },
         {
+          "title": "Pi and OMP lanes do not select agent profiles",
+          "if": { "required": ["harness"], "properties": { "harness": { "enum": ["pi", "omp"] } } },
+          "then": { "properties": { "agent": false } }
+        },
+        {
           "title": "OMP remains read-only",
           "if": { "required": ["harness"], "properties": { "harness": { "const": "omp" } } },
           "then": { "properties": { "writerPolicy": { "const": "read-only" }, "ownedPaths": { "maxItems": 0 } } }

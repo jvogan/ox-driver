@@ -39,6 +39,9 @@ for (const event of [
   { type: "agent_end" },
   { type: "agent_settled" },
 ]) process.stdout.write(JSON.stringify(event) + "\\n");
+// Keep the fixture alive long enough for the controller to persist its process
+// identity even when the full test suite is competing for CPU time.
+setTimeout(() => {}, 1_000);
 `, { mode: 0o700 });
 	await chmod(launcher, 0o700);
 	return { root, repository, launcher };

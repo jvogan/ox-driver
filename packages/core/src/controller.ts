@@ -2,12 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, readFile, readlink, realpath, unlink, writeFile } from "node:fs/promises";
 import { delimiter, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
-import { spawn } from "node:child_process";
 
 import { AdapterRegistry } from "./registry.js";
 import { RunBudgetLedger, type ControllerBudgetLedger } from "./budget.js";
 import { redactedTextEvidence } from "./evidence.js";
-import { captureProcessIdentity, processIdentityStatus, reapDetachedProcessGroup } from "./process.js";
+import { captureProcessIdentity, processIdentityStatus, runOwnedProcess as runProcess, type OwnedProcessResult as ProcessResult } from "./process.js";
 import { RunStore } from "./store.js";
 import { DEFAULT_ACCEPTANCE_TIMEOUT_SECONDS } from "./types.js";
 import type {
@@ -26,17 +25,6 @@ import type {
 	RunStatus,
 } from "./types.js";
 import { capabilityIssues, validateRunSpec } from "./validation.js";
-
-interface ProcessResult {
-	exitCode: number | null;
-	stdout: string;
-	stderr: string;
-	stdoutTruncated: boolean;
-	stderrTruncated: boolean;
-	backgroundProcessesDetected: boolean;
-	processTreeReaped: boolean;
-	terminationEscalated: boolean;
-}
 
 interface WorkspaceEntry {
 	status: string;
@@ -459,87 +447,8 @@ function effectivePowerEvidence(
 	};
 }
 
-const OUTPUT_LIMIT = 1024 * 1024;
 const WORKSPACE_OUTPUT_LIMIT = 64 * 1024 * 1024;
 const WORKSPACE_FILE_LIMIT = 256 * 1024 * 1024;
-
-function appendBounded(current: Buffer, chunk: Buffer, limit: number): Buffer {
-	if (current.length >= limit) return current;
-	return Buffer.concat([current, chunk.subarray(0, limit - current.length)]);
-}
-
-async function runProcess(
-	command: string,
-	args: string[],
-	options: { cwd: string; env: NodeJS.ProcessEnv; signal?: AbortSignal; outputLimitBytes?: number },
-): Promise<ProcessResult> {
-	return new Promise((resolveProcess, rejectProcess) => {
-		const child = spawn(command, args, {
-			cwd: options.cwd,
-			env: options.env,
-			stdio: ["ignore", "pipe", "pipe"],
-			detached: process.platform !== "win32",
-		});
-		let stdout: Buffer<ArrayBufferLike> = Buffer.alloc(0);
-		let stderr: Buffer<ArrayBufferLike> = Buffer.alloc(0);
-		let stdoutTruncated = false;
-		let stderrTruncated = false;
-		const outputLimit = options.outputLimitBytes ?? OUTPUT_LIMIT;
-		let settled = false;
-		let forceKillTimer: NodeJS.Timeout | undefined;
-		const terminate = (): void => {
-			if (!child.pid) return;
-			try {
-				if (process.platform === "win32") child.kill("SIGTERM");
-				else process.kill(-child.pid, "SIGTERM");
-			} catch {
-				child.kill("SIGTERM");
-			}
-			forceKillTimer = setTimeout(() => {
-				if (child.exitCode !== null || !child.pid) return;
-				try {
-					if (process.platform === "win32") child.kill("SIGKILL");
-					else process.kill(-child.pid, "SIGKILL");
-				} catch {
-					child.kill("SIGKILL");
-				}
-			}, 5_000);
-			forceKillTimer.unref();
-		};
-		options.signal?.addEventListener("abort", terminate, { once: true });
-		if (options.signal?.aborted) terminate();
-		child.stdout.on("data", (chunk: Buffer) => {
-			if (stdout.length + chunk.length > outputLimit) stdoutTruncated = true;
-			stdout = appendBounded(stdout, chunk, outputLimit);
-		});
-		child.stderr.on("data", (chunk: Buffer) => {
-			if (stderr.length + chunk.length > outputLimit) stderrTruncated = true;
-			stderr = appendBounded(stderr, chunk, outputLimit);
-		});
-		child.once("error", (error) => {
-			if (settled) return;
-			settled = true;
-			if (forceKillTimer) clearTimeout(forceKillTimer);
-			options.signal?.removeEventListener("abort", terminate);
-			rejectProcess(error);
-		});
-		child.once("close", async (code) => {
-			if (settled) return;
-			settled = true;
-			if (forceKillTimer) clearTimeout(forceKillTimer);
-			options.signal?.removeEventListener("abort", terminate);
-			const processTree = await reapDetachedProcessGroup(child.pid);
-			resolveProcess({
-				exitCode: code,
-				stdout: stdout.toString("utf8"),
-				stderr: stderr.toString("utf8"),
-				stdoutTruncated,
-				stderrTruncated,
-				...processTree,
-			});
-		});
-	});
-}
 
 async function runGit(
 	cwd: string,
@@ -797,7 +706,7 @@ async function runAcceptance(spec: RunSpec, signal: AbortSignal, runDirectory: s
 		}
 		const acceptance = {
 			command,
-			passed: result.exitCode === 0 && !commandAbort.timedOut() && !result.backgroundProcessesDetected && result.processTreeReaped,
+			passed: result.exitCode === 0 && !signal.aborted && !commandAbort.timedOut() && !result.backgroundProcessesDetected && result.processTreeReaped,
 			durationMs: Math.max(0, Date.now() - startedAt),
 			timedOut: commandAbort.timedOut(),
 			exitCode: result.exitCode,

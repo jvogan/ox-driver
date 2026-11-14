@@ -128,6 +128,7 @@ export function validateRouteProfile(value: unknown): RouteProfile {
 	const agentRaw = optionalObject(root.agent, "route profile agent");
 	let agent: RouteProfile["agent"];
 	if (agentRaw) {
+		if (harness === "pi" || harness === "omp") throw new Error(`route profile agent is unavailable for ${harness}`);
 		keys(agentRaw, ["defaultProfile", "allowedProfiles"], "route profile agent");
 		agent = {
 			...(agentRaw.defaultProfile === undefined ? {} : { defaultProfile: string(agentRaw.defaultProfile, "route profile default agent", 256) }),
@@ -168,6 +169,9 @@ export function validateRouteProfile(value: unknown): RouteProfile {
 		const expectedSha256 = runtimeRaw.expectedSha256 === undefined ? undefined : string(runtimeRaw.expectedSha256, "route profile runtime expectedSha256", 64);
 		if (expectedSha256 !== undefined && !/^[0-9a-f]{64}$/.test(expectedSha256)) {
 			throw new Error("route profile runtime expectedSha256 must be a lowercase SHA-256 digest");
+		}
+		if (runtimeRaw.mode === "guarded" && (!agentDirectory || !homeDirectory)) {
+			throw new Error("guarded route profile runtime requires agentDirectory and homeDirectory");
 		}
 		runtime = {
 			...(runtimeRaw.mode === undefined ? {} : { mode: runtimeRaw.mode as "direct" | "guarded" }),

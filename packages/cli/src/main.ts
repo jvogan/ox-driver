@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import { validateRunSpec } from "@ox-driver/core";
 import { runHandoff } from "./handoff.js";
 import { runOmpReview } from "./omp-review.js";
-import { createController, createStateController, handoffRuntime } from "./runtime.js";
+import { createController, createStateController, doctorHarnesses, handoffRuntime } from "./runtime.js";
 
 const usage = `Usage:
   ox-driver validate <run-spec.json>
@@ -91,8 +91,7 @@ async function main(argv: string[]): Promise<number> {
 
 	switch (command) {
 		case "doctor": {
-			const { controller } = await createController();
-			print(await controller.doctor(argument === "--all" ? undefined : argument ?? "opencode"));
+			print(await doctorHarnesses(argument === "--all" ? undefined : argument ?? "opencode"));
 			return 0;
 		}
 		case "preflight": {

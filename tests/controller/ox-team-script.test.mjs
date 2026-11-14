@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
@@ -100,6 +100,56 @@ async function runTeam(fixture, lanes, extra = [], environment = {}) {
 async function echo(fixture, harness, workerPath) {
 	return JSON.parse(await readFile(join(fixture.echoDir, `${harness}-${basename(workerPath)}.json`), "utf8"));
 }
+
+test("team validation resolves mixed routes and dependencies without launching or allocating", async () => {
+	const f = await fixture();
+	const profiles = join(f.root, "routes");
+	await mkdir(profiles);
+	for (const harness of ["opencode", "pi", "omp"]) {
+		await writeFile(join(profiles, `${harness}-example.json`), JSON.stringify({
+			version: 1, id: `${harness}-example`, status: "active", harness,
+			tier: harness === "omp" ? "attested" : "trusted-host",
+			launcher: { command: f.runners[harness], versionArgs: ["--version"] },
+			route: { source: "explicit", provider: "fixture-provider", model: "fixture-model", reasoning: "max" },
+			...(harness === "pi" ? { runtime: { mode: "direct" } } : {}),
+			...(harness === "omp" ? { runtime: { mode: "guarded", agentDirectory: f.workers[2], homeDirectory: f.workers[3] } } : {}),
+			pricingPolicy: "report-only", credentialPolicy: "from-installed-harness",
+		}));
+	}
+	const lanes = [
+		{ id: "build", role: "builder", objective: "implement", harness: "opencode", route: "opencode-example", workerPath: f.workers[0], checks: ["fixture-check"], timeoutSeconds: 120 },
+		{ id: "review", role: "reviewer", objective: "review", harness: "pi", route: "pi-example", workerPath: f.workers[0], dependsOn: ["build"] },
+		{ id: "independent", role: "independent-reviewer", objective: "inspect", harness: "omp", route: "omp-example", workerPath: f.workers[1] },
+	];
+	const plan = join(f.root, "validate-plan.json");
+	await writeFile(plan, JSON.stringify({ version: 1, lanes }));
+	const state = join(f.root, "unallocated-state");
+	const environment = { ...process.env, XDG_STATE_HOME: state, OX_DRIVER_STATE_DIR: join(state, "runs"), OX_DRIVER_ORCHESTRATION_STATE_DIR: join(state, "orchestrations"), OX_DRIVER_WORKSPACE_STATE_DIR: join(state, "workspaces"), OX_DRIVER_ROUTE_PROFILE_DIR: profiles, OX_TEAM_ECHO_DIR: f.echoDir, ...Object.fromEntries(Object.entries(f.runners).map(([harness, runnerPath]) => [`OX_DRIVER_${harness.toUpperCase()}_LANE_RUNNER`, runnerPath])) };
+	for (const args of [["validate", plan], ["run", plan, "--dry-run"]]) {
+		const result = await execFileAsync(process.execPath, ["scripts/ox_team.mjs", ...args], { env: environment });
+		const report = JSON.parse(result.stdout);
+		assert.equal(report.valid, true);
+		assert.equal(report.allocated, false);
+		assert.equal(report.modelCalls, 0);
+		assert.deepEqual(report.dependencyOrder, [["build", "independent"], ["review"]]);
+		assert.deepEqual(report.routes.map((route) => route.route.reasoning), ["max", "max", "max"]);
+		assert.equal(report.effectivePlan.lanes[0].timeoutSeconds, 120);
+		assert.equal(report.effectivePlan.lanes[1].writerPolicy, "read-only");
+		assert.doesNotMatch(result.stderr, /OX_DRIVER_ORCHESTRATION_ID=/);
+	}
+	await assert.rejects(access(state));
+	await assert.rejects(access(f.echoDir));
+	const profilePath = join(profiles, "opencode-example.json");
+	const profile = JSON.parse(await readFile(profilePath, "utf8"));
+	profile.agent = { allowedProfiles: ["admitted-agent"] };
+	await writeFile(profilePath, JSON.stringify(profile));
+	await writeFile(plan, JSON.stringify({ version: 1, lanes: [{ ...lanes[0], agent: "other-agent" }, ...lanes.slice(1)] }));
+	await assert.rejects(execFileAsync(process.execPath, ["scripts/ox_team.mjs", "validate", plan], { env: environment }), /allowlist/);
+	await assert.rejects(access(state));
+	await writeFile(plan, JSON.stringify({ version: 1, lanes: [{ ...lanes[0], route: "missing-route" }, ...lanes.slice(1)] }));
+	await assert.rejects(execFileAsync(process.execPath, ["scripts/ox_team.mjs", "validate", plan], { env: environment }), /missing-route/);
+	await assert.rejects(access(state));
+});
 
 test("a four-agent Pi-only team runs without resolving an OpenCode runner", async () => {
 	const f = await fixture();

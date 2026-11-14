@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { access, mkdir, stat, writeFile } from "node:fs/promises";
+import { access, link, lstat, mkdir, open, readdir, rename, unlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -18,6 +19,7 @@ const USAGE = `usage:
   ox_route.mjs init-pi       --launcher <command> --provider <provider> --model <model> --reasoning <effort> [options]
   ox_route.mjs init-omp      --launcher <command> --provider <provider> --model <model> --reasoning <effort>
                              --agent-dir <absolute-directory> --home-dir <absolute-directory> [options]
+  ox_route.mjs list [--profile-dir <absolute-directory>]
   ox_route.mjs check [--id <profile-id>] [--profile-dir <absolute-directory>]
 
 shared options:
@@ -39,7 +41,9 @@ Examples:
 
 Each init command writes a route profile without credentials. The installed
 harness keeps responsibility for authentication. check validates a profile
-through the compiled core loader and makes no model call.`;
+through the compiled core loader. list reports valid and invalid profile files
+independently, including inactive routes and launcher pins. Both make no model
+call and do not invoke a harness.`;
 
 function fail(message) { throw new Error(message); }
 
@@ -53,6 +57,11 @@ function bounded(value, flag, maximum) {
 function print(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
 
 function defaultProfileDirectory() {
+	const explicit = process.env.OX_DRIVER_ROUTE_PROFILE_DIR?.trim();
+	if (explicit) {
+		if (!isAbsolute(explicit)) fail("OX_DRIVER_ROUTE_PROFILE_DIR must be an absolute path");
+		return explicit;
+	}
 	const configured = process.env.XDG_CONFIG_HOME?.trim();
 	if (configured && !isAbsolute(configured)) fail("XDG_CONFIG_HOME must be an absolute path");
 	return join(configured || join(homedir(), ".config"), "ox-driver", "routes");
@@ -64,7 +73,7 @@ function defaultId(command) {
 
 function parse(argv) {
 	const [command, ...rest] = argv;
-	if (!["init-opencode", "init-pi", "init-omp", "check"].includes(command)) fail(USAGE);
+	if (!["init-opencode", "init-pi", "init-omp", "check", "list"].includes(command)) fail(USAGE);
 	const valueFlags = new Set([
 		"--launcher", "--provider", "--model", "--reasoning", "--agent", "--id", "--profile-dir",
 		"--expected-version", "--expected-sha256", "--agent-dir", "--home-dir", "--env",
@@ -75,12 +84,12 @@ function parse(argv) {
 	for (let index = 0; index < rest.length; index += 1) {
 		const flag = rest[index];
 		if (flag === "--force") {
-			if (command === "check") fail(`unknown option for check: ${flag}\n\n${USAGE}`);
+			if (["check", "list"].includes(command)) fail(`unknown option for ${command}: ${flag}\n\n${USAGE}`);
 			force = true;
 			continue;
 		}
 		if (!valueFlags.has(flag)) fail(`unknown option: ${flag}\n\n${USAGE}`);
-		if (command === "check" && !["--id", "--profile-dir"].includes(flag)) fail(`unknown option for check: ${flag}\n\n${USAGE}`);
+		if (["check", "list"].includes(command) && !(command === "list" ? ["--profile-dir"] : ["--id", "--profile-dir"]).includes(flag)) fail(`unknown option for ${command}: ${flag}\n\n${USAGE}`);
 		const value = rest[++index]?.trim() || fail(`${flag} requires a value`);
 		if (flag === "--env") {
 			if (command !== "init-omp") fail("--env is available only for init-omp");
@@ -95,7 +104,7 @@ function parse(argv) {
 	if (!isAbsolute(profileDirectory)) fail("--profile-dir must be an absolute directory");
 	const id = values.get("--id") ?? defaultId(command);
 	if (!PROFILE_ID.test(id)) fail("--id must be a canonical lowercase profile id (letters, digits, dot, underscore, hyphen)");
-	if (command === "check") return { command, id, profileDirectory };
+	if (["check", "list"].includes(command)) return { command, id, profileDirectory };
 	for (const flag of ["--launcher", "--provider", "--model", "--reasoning"]) {
 		if (!values.has(flag)) fail(`${flag} is required for ${command}\n\n${USAGE}`);
 	}
@@ -140,7 +149,9 @@ function profileFor(options) {
 		? { mode: "direct", ...(options.expectedVersion ? { expectedVersion: options.expectedVersion } : {}), ...(options.expectedSha256 ? { expectedSha256: options.expectedSha256 } : {}) }
 		: harness === "omp"
 			? { mode: "guarded", agentDirectory: options.agentDirectory, homeDirectory: options.homeDirectory, environmentNames: options.environmentNames, ...(options.expectedVersion ? { expectedVersion: options.expectedVersion } : {}), ...(options.expectedSha256 ? { expectedSha256: options.expectedSha256 } : {}) }
-			: undefined;
+			: (options.expectedVersion || options.expectedSha256)
+				? { ...(options.expectedVersion ? { expectedVersion: options.expectedVersion } : {}), ...(options.expectedSha256 ? { expectedSha256: options.expectedSha256 } : {}) }
+				: undefined;
 	return {
 		version: 1,
 		id: options.id,
@@ -164,7 +175,7 @@ async function initProfile(options, core) {
 	if (profile.harness === "omp") {
 		for (const directory of [profile.runtime.agentDirectory, profile.runtime.homeDirectory]) {
 			await mkdir(directory, { recursive: true, mode: 0o700 });
-			const metadata = await stat(directory);
+			const metadata = await lstat(directory);
 			if (!metadata.isDirectory() || (metadata.mode & 0o077) !== 0) {
 				fail(`OMP runtime directory must be a mode-0700 directory: ${directory}`);
 			}
@@ -172,15 +183,35 @@ async function initProfile(options, core) {
 	}
 	await mkdir(options.profileDirectory, { recursive: true, mode: 0o700 });
 	const filePath = join(options.profileDirectory, `${options.id}.json`);
-	const existed = await access(filePath).then(() => true, () => false);
-	try {
-		await writeFile(filePath, `${JSON.stringify(profile, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: options.force ? "w" : "wx" });
-	} catch (error) {
-		if (error && typeof error === "object" && error.code === "EEXIST") {
-			fail(`refusing to overwrite the existing profile at ${filePath}; rerun with --force to replace it, or choose another --id`);
-		}
+	const existing = await lstat(filePath).catch((error) => {
+		if (error.code === "ENOENT") return undefined;
 		throw error;
-	}
+	});
+	if (existing?.isSymbolicLink() || (existing && !existing.isFile())) fail(`refusing to replace a non-regular profile at ${filePath}`);
+	if (existing && !options.force) fail(`refusing to overwrite the existing profile at ${filePath}; rerun with --force to replace it, or choose another --id`);
+	const existed = existing !== undefined;
+	const temporaryPath = join(options.profileDirectory, `.${options.id}.${randomUUID()}.tmp`);
+	try {
+		const handle = await open(temporaryPath, "wx", 0o600);
+		try {
+			await handle.writeFile(`${JSON.stringify(profile, null, 2)}\n`, "utf8");
+			await handle.sync();
+		} finally { await handle.close(); }
+		if (options.force) {
+			const current = await lstat(filePath).catch((error) => {
+				if (error.code === "ENOENT") return undefined;
+				throw error;
+			});
+			if (current?.isSymbolicLink() || (current && !current.isFile())) fail(`refusing to replace a non-regular profile at ${filePath}`);
+			if (current?.ino !== existing?.ino || current?.dev !== existing?.dev) fail("route profile changed before replacement");
+			await rename(temporaryPath, filePath);
+		} else {
+			await link(temporaryPath, filePath);
+		}
+	} catch (error) {
+		if (error?.code === "EEXIST") fail(`refusing to overwrite the existing profile at ${filePath}; rerun with --force to replace it, or choose another --id`);
+		throw error;
+	} finally { await unlink(temporaryPath).catch((error) => { if (error.code !== "ENOENT") throw error; }); }
 	const resolved = await core.loadRouteProfile(options.profileDirectory, options.id, { expectedHarness: profile.harness, expectedTier: profile.tier });
 	print({
 		created: true,
@@ -204,10 +235,31 @@ async function checkProfile(options, core) {
 	print({ valid: true, profile: resolved.id, status: resolved.status, harness: resolved.harness, tier: resolved.tier, route: resolved.route, launcher: resolved.launcher, ...(resolved.agent ? { agent: resolved.agent } : {}), ...(resolved.runtime ? { runtime: resolved.runtime } : {}), filePath: resolved.filePath, sha256: resolved.sha256 });
 }
 
+async function listProfiles(options, core) {
+	const entries = await readdir(options.profileDirectory).catch((error) => {
+		if (error.code === "ENOENT") return [];
+		throw error;
+	});
+	const profiles = [];
+	for (const name of entries.filter((entry) => entry.endsWith(".json")).sort()) {
+		const id = name.slice(0, -5);
+		try {
+			const profile = await core.loadRouteProfile(options.profileDirectory, id, { requireActive: false });
+			profiles.push({ id, valid: true, harness: profile.harness, status: profile.status, tier: profile.tier,
+				pins: { ...(profile.runtime?.expectedVersion ? { expectedVersion: profile.runtime.expectedVersion } : {}), ...(profile.runtime?.expectedSha256 ? { expectedSha256: profile.runtime.expectedSha256 } : {}) }, filePath: profile.filePath });
+		} catch (error) {
+			profiles.push({ id, valid: false, filePath: join(options.profileDirectory, name), error: error instanceof Error ? error.message : String(error) });
+		}
+	}
+	print({ modelCalls: 0, profileDirectory: options.profileDirectory, profiles });
+}
+
 async function main() {
+	if (process.argv.slice(2).some((arg) => arg === "--help" || arg === "-h")) { process.stdout.write(`${USAGE}\n`); return; }
 	const options = parse(process.argv.slice(2));
 	const core = await coreLoader();
-	if (options.command === "check") await checkProfile(options, core);
+	if (options.command === "list") await listProfiles(options, core);
+	else if (options.command === "check") await checkProfile(options, core);
 	else await initProfile(options, core);
 }
 

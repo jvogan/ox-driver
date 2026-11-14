@@ -23,6 +23,8 @@ import { createOmpRuntimeIsolation } from "../../packages/adapters/omp/dist/isol
 import { AdapterRegistry, OxController, RunStore } from "../../packages/core/dist/index.js";
 import { trackedMkdtemp } from "./helpers/tracked-temp.mjs";
 
+const containmentInspection = await inspectOmpProcessContainment();
+
 const FIXTURE_USAGE = {
 	input: 100,
 	output: 20,
@@ -212,7 +214,25 @@ async function startShmHolder(executable, name, cwd) {
 test("fails closed when the reviewed Seatbelt mechanism digest drifts", async () => {
 	const inspection = await inspectOmpProcessContainment("0".repeat(64));
 	assert.equal(inspection.available, false);
-	assert.match(inspection.notice, process.platform === "darwin" ? /digest drifted/ : /unavailable/);
+	assert.match(inspection.notice, /OMP process containment is unavailable:/);
+	if (containmentInspection.available || /digest drifted/.test(containmentInspection.notice)) {
+		assert.match(inspection.notice, /sandbox-exec digest drifted from the reviewed mechanism/);
+	} else {
+		assert.equal(inspection.notice, containmentInspection.notice);
+	}
+});
+
+test("rejects an unavailable process containment provider before preparing a launch", async () => {
+	await assert.rejects(createOmpProcessContainmentLaunch({
+		inspection: { available: false, notice: "fixture mechanism unavailable" },
+		workspaceRoot: "/workspace/project",
+		excludedPaths: [".git"],
+		controllerRoot: "/state/controller",
+		writablePaths: ["/state/controller/tmp"],
+		executable: "/fixture/omp",
+		executableSha256: "a".repeat(64),
+		routeEnforcementSha256: "b".repeat(64),
+	}), /OMP process containment provider is not available/);
 });
 
 async function validContainmentProof() {
@@ -494,7 +514,9 @@ async function controllerFor(fixture, route, options = {}) {
 	return { controller: new OxController(registry, new RunStore(stateRoot, join(stateRoot, "leases"))), stateRoot };
 }
 
-const containedTest = process.platform === "darwin" ? test : test.skip;
+const containedTest = (name, fn) => test(name, {
+	skip: containmentInspection.available ? false : containmentInspection.notice,
+}, fn);
 
 test("qualifies an OMP RPC v2 binary without sending a model prompt", async () => {
 	assert.equal(await ompPolicyBundleSha256(), OMP_POLICY_BUNDLE_SHA256);
@@ -509,17 +531,21 @@ test("qualifies an OMP RPC v2 binary without sending a model prompt", async () =
 		containmentMechanismSha256: CONTAINMENT_MECHANISM_SHA256,
 	});
 	const doctor = await adapter.doctor();
-	assert.equal(doctor.compatibility, process.platform === "darwin" ? "compatible" : "degraded", JSON.stringify(doctor, null, 2));
+	assert.equal(doctor.compatibility, containmentInspection.available ? "compatible" : "degraded", JSON.stringify(doctor, null, 2));
 	assert.equal(doctor.harnessVersion, "18.0.6");
 	assert.equal(doctor.capabilities["events.structured"], true);
 	assert.equal(doctor.capabilities["route.configured"], true);
-	assert.equal(doctor.capabilities["telemetry.usage"], process.platform === "darwin");
-	assert.equal(doctor.capabilities["sandbox.filesystem"], process.platform === "darwin");
-	assert.equal(doctor.probe.executionQualified, process.platform === "darwin");
-	if (process.platform === "darwin") {
+	assert.equal(doctor.capabilities["telemetry.usage"], containmentInspection.available);
+	assert.equal(doctor.capabilities["sandbox.filesystem"], containmentInspection.available);
+	assert.equal(doctor.probe.executionQualified, containmentInspection.available);
+	if (containmentInspection.available) {
 		assert.match(doctor.notices.join("\n"), /Version and RPC probes executed the immutable staged artifact through the production Seatbelt boundary with network denied/);
+		assert.match(doctor.notices.join("\n"), /callback-issued proof digests are not accepted/);
+	} else {
+		assert.ok(doctor.notices.includes(containmentInspection.notice));
+		assert.ok((await adapter.preflight(spec(await repository()), doctor))
+			.some((issue) => issue.code === "OMP_CONTAINMENT_UNVERIFIED"));
 	}
-	assert.match(doctor.notices.join("\n"), /callback-issued proof digests are not accepted|bubblewrap remains disabled/);
 	assert.equal(doctor.capabilities["agents.children"], false);
 });
 
@@ -885,13 +911,22 @@ containedTest("Seatbelt kernel denies host control, unrelated IPC, signals, and 
 	}
 });
 
-containedTest("rejects a controller run root nested inside the inspected workspace", async () => {
+test("rejects a controller run root nested inside the workspace before staging containment", async () => {
 	const fixture = await ompFixture();
 	const cwd = await repository();
 	const stateRoot = join(cwd, "controller-state");
 	const writable = join(stateRoot, "tmp");
 	await mkdir(writable, { recursive: true, mode: 0o700 });
-	const inspection = await inspectOmpProcessContainment();
+	const inspection = {
+		available: true,
+		kind: "darwin-seatbelt",
+		command: "/fixture/sandbox-exec",
+		boundarySha256: "b".repeat(64),
+		systemProfilePath: "/fixture/system.sb",
+		systemProfileSha256: "c".repeat(64),
+		mechanismSha256: "d".repeat(64),
+		notice: "synthetic inspection for scope rejection",
+	};
 	await assert.rejects(
 		createOmpProcessContainmentLaunch({
 			inspection,

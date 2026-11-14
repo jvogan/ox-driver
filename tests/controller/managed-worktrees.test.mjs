@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -62,6 +62,39 @@ test("records a descendant commit without treating the managed identity as drift
 	assert.equal(removed.discardedCommits[0], removed.currentCommit);
 });
 
+test("duplicate allocation preserves the original record and dirty worktree", async () => {
+	const source = await sourceFixture();
+	const state = await trackedMkdtemp(join(tmpdir(), "ox-driver-worktree-duplicate-"));
+	const store = new ManagedWorktreeStore(state);
+	const original = await store.create(source);
+	const recordPath = join(state, "records", `${original.id}.json`);
+	const originalRecord = await readFile(recordPath);
+	await writeFile(join(original.path, "tracked.txt"), "keep existing changes\n");
+	await assert.rejects(store.create(source, { id: original.id }), { code: "EEXIST" });
+	assert.deepEqual(await readFile(recordPath), originalRecord);
+	assert.equal(await readFile(join(original.path, "tracked.txt"), "utf8"), "keep existing changes\n");
+	assert.equal((await store.inspect(original.id)).status, "dirty");
+	assert.deepEqual(await readdir(join(state, "records")), [`${original.id}.json`]);
+});
+
+test("concurrent allocation admits one owner and preserves pre-existing unrecorded paths", async () => {
+	const source = await sourceFixture();
+	const state = await trackedMkdtemp(join(tmpdir(), "ox-driver-worktree-concurrent-"));
+	const store = new ManagedWorktreeStore(state);
+	const id = "11111111-1111-4111-8111-111111111111";
+	const results = await Promise.allSettled([store.create(source, { id }), store.create(source, { id })]);
+	assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+	assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+	assert.equal((await store.inspect(id)).status, "ready");
+	const otherId = "22222222-2222-4222-8222-222222222222";
+	const existingPath = join(state, "worktrees", otherId);
+	await mkdir(existingPath);
+	await writeFile(join(existingPath, "keep.txt"), "keep unrecorded files\n");
+	await assert.rejects(store.create(source, { id: otherId }), { code: "EEXIST" });
+	assert.equal(await readFile(join(existingPath, "keep.txt"), "utf8"), "keep unrecorded files\n");
+	await assert.rejects(access(join(state, "records", `${otherId}.json`)));
+});
+
 test("explicitly discards a dirty exact managed worktree and reports Git-visible changed paths", async () => {
 	const source = await sourceFixture();
 	const state = await trackedMkdtemp(join(tmpdir(), "ox-driver-worktree-discard-state-"));
@@ -119,3 +152,68 @@ test("standalone workspace command returns lifecycle JSON", async () => {
 	assert.deepEqual(removed.discardedChangedPaths, ["script output.txt"]);
 	assert.deepEqual(removed.discardedCommits, []);
 });
+
+for (const scenario of ["partial-path", "registration-only", "clean-failure", "replaced-path"]) {
+	test(`failed allocation preserves discoverable cleanup evidence: ${scenario}`, { skip: process.platform === "win32" }, async () => {
+		const source = await sourceFixture();
+		const state = await trackedMkdtemp(join(tmpdir(), "ox-driver-worktree-rollback-"));
+		const fixture = await trackedMkdtemp(join(tmpdir(), "ox-driver-worktree-git-"));
+		const realGit = (await execFileAsync("/bin/sh", ["-c", "command -v git"])).stdout.trim();
+		const wrapper = join(fixture, "git-fixture.cjs");
+		const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+		await writeFile(wrapper, `
+			const { spawnSync } = require('node:child_process');
+			const { writeFileSync, rmSync, renameSync, mkdirSync } = require('node:fs');
+			const args = process.argv.slice(2);
+			const command = args.indexOf('worktree');
+			const scenario = ${JSON.stringify(scenario)};
+			if (command >= 0 && args[command + 1] === 'add') {
+				if (scenario === 'clean-failure') process.exit(1);
+				const result = spawnSync(${JSON.stringify(realGit)}, args, { stdio: 'inherit' });
+				if (result.status !== 0) process.exit(result.status ?? 1);
+				const path = args[command + 3];
+				if (scenario === 'registration-only') rmSync(path, { recursive: true });
+				else if (scenario === 'replaced-path') {
+					renameSync(path, path + '.owned');
+					mkdirSync(path);
+					writeFileSync(path + '/foreign.txt', 'preserve replacement');
+				} else writeFileSync(path + '/partial.txt', 'preserve partial checkout');
+				process.exit(1);
+			}
+			if (command >= 0 && args[command + 1] === 'remove' && scenario !== 'clean-failure') process.exit(1);
+			const result = spawnSync(${JSON.stringify(realGit)}, args, { stdio: 'inherit' });
+			process.exit(result.status ?? 1);
+		`);
+		const shim = join(fixture, "git");
+		await writeFile(shim, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(wrapper)} "$@"\n`);
+		await chmod(shim, 0o700);
+		const id = "33333333-3333-4333-8333-333333333333";
+		const moduleUrl = new URL("../../packages/core/dist/managed-worktrees.js", import.meta.url).href;
+		const program = `
+			import { ManagedWorktreeStore } from ${JSON.stringify(moduleUrl)};
+			try { await new ManagedWorktreeStore(${JSON.stringify(state)}).create(${JSON.stringify(source)}, { id: ${JSON.stringify(id)} }); process.exitCode = 2; }
+			catch (error) { process.stdout.write(JSON.stringify({ message: error.message })); }
+		`;
+		const result = await execFileAsync(process.execPath, ["--input-type=module", "-e", program], { env: { ...process.env, PATH: `${fixture}:${process.env.PATH ?? "/usr/bin:/bin"}` } });
+		const recordPath = join(state, "records", `${id}.json`);
+		const path = join(state, "worktrees", id);
+		if (scenario === "clean-failure") {
+			await assert.rejects(access(recordPath));
+			await assert.rejects(access(path));
+			assert.doesNotMatch(JSON.parse(result.stdout).message, /cleanup is incomplete/);
+		} else {
+			assert.match(JSON.parse(result.stdout).message, /cleanup is incomplete and its record remains/);
+			assert.equal(JSON.parse(await readFile(recordPath, "utf8")).path, path);
+			if (scenario === "registration-only") {
+				assert.equal((await new ManagedWorktreeStore(state).inspect(id)).status, "missing");
+				assert.ok((await execFileAsync(realGit, ["worktree", "list", "--porcelain"], { cwd: source })).stdout.includes(path));
+			} else if (scenario === "partial-path") {
+				assert.equal((await new ManagedWorktreeStore(state).list())[0].status, "dirty");
+				assert.equal(await readFile(join(path, "partial.txt"), "utf8"), "preserve partial checkout");
+			} else {
+				assert.equal(await readFile(join(path, "foreign.txt"), "utf8"), "preserve replacement");
+				await access(`${path}.owned`);
+			}
+		}
+	});
+}

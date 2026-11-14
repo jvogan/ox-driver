@@ -29,10 +29,10 @@ node scripts/ox_route.mjs init-omp \
   --home-dir /absolute/path/to/omp-home
 ```
 
-Add `--expected-version` or `--expected-sha256` when the route requires an
-exact launcher. Add repeated `--env NAME` arguments to the OMP initializer for
-the environment-variable names admitted to that process. Route profiles never
-store the corresponding values.
+Add `--expected-version` or `--expected-sha256` to check the launcher's version
+or digest. Add repeated `--env NAME` arguments to the OMP initializer for the
+environment-variable names admitted to that process. Route profiles record
+the names; supply the values through the process environment.
 
 Validate profiles and installed harnesses:
 

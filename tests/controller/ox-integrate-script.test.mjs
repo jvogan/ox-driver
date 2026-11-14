@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -202,6 +202,18 @@ test("integrate proposes, exports, and applies Pi and OpenCode changes with pass
 	assert.equal(outcome.checks.length, 1);
 	assert.equal(outcome.checks[0].passed, true);
 	assert.ok(outcome.cleanupCommand.includes(outcome.workspace.id));
+	assert.equal(outcome.kind, "integration");
+	assert.match(outcome.finalWorkspaceSha256, /^[0-9a-f]{64}$/);
+	assert.deepEqual(outcome.selectedLanes.map((lane) => lane.runId), [receiptA.runId, receiptB.runId]);
+	const inspected = await integrate(value, ["inspect", outcome.integrationId, "--expected-sha256", outcome.receiptSha256]);
+	assert.equal(inspected.code, 0, inspected.stderr);
+	assert.deepEqual(JSON.parse(inspected.stdout), outcome);
+	const storedEnvelope = JSON.parse(await readFile(outcome.receiptPath, "utf8"));
+	storedEnvelope.receipt.finalWorkspaceSha256 = "0".repeat(64);
+	await writeFile(outcome.receiptPath, JSON.stringify(storedEnvelope));
+	const tampered = await integrate(value, ["inspect", outcome.integrationId]);
+	assert.notEqual(tampered.code, 0);
+	assert.match(tampered.stderr, /digest mismatch/);
 	assert.equal(await readFile(join(outcome.workspace.path, "src", "a.txt"), "utf8"), "alpha changed by lane-a\n");
 	assert.equal(await readFile(join(outcome.workspace.path, "src", "b-new.txt"), "utf8"), "created by lane-b\n");
 
@@ -284,4 +296,183 @@ test("integrate refuses mixed base commits and reports a mid-sequence apply fail
 	assert.deepEqual(outcome.applied.map((item) => item.laneId), ["lane-a"]);
 	assert.equal(outcome.applyFailure.laneId, "lane-b");
 	assert.deepEqual(outcome.checks, []);
+});
+
+test("integration checks reject redirected background descendants and report timeouts", { skip: process.platform === "win32", timeout: 20_000 }, async (t) => {
+	const value = await fixture();
+	const source = await sourceRepository();
+	const patch = await lanePatch(source, (clone) => writeFile(join(clone, "src", "a.txt"), "changed by lane\n"));
+	const receipt = await childReceipt(value, { runId: randomUUID(), changedPaths: ["src/a.txt"], patch, baseCommit: source.baseCommit });
+	const noChange = await childReceipt(value, { runId: randomUUID(), changedPaths: [] });
+	await persistHerd(value, [{ laneId: "lane-a", receipt }, { laneId: "lane-b", receipt: noChange }]);
+	const pidPath = join(value.stateHome, "descendant.pid");
+	const scriptPath = join(value.stateHome, "background-check.cjs");
+	const childCode = "process.on('SIGTERM', () => {}); process.send('ready'); setInterval(() => {}, 1000);";
+	await writeFile(scriptPath, `
+		const { spawn } = require('node:child_process');
+		const child = spawn(process.execPath, ['-e', ${JSON.stringify(childCode)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+		child.once('message', () => {
+			require('node:fs').writeFileSync(${JSON.stringify(pidPath)}, String(child.pid));
+			process.exit(0);
+		});
+	`);
+	t.after(async () => {
+		const pid = Number(await readFile(pidPath, "utf8").catch(() => "0"));
+		if (pid) {
+			try { process.kill(pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+		}
+	});
+	const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+	const args = ["apply", value.allocation.orchestrationId, "--lane", "lane-a", "--repo", source.cwd];
+	const background = await integrate(value, [...args, "--check", `${quote(process.execPath)} ${quote(scriptPath)}`]);
+	assert.equal(background.code, 1);
+	const failed = JSON.parse(background.stdout);
+	assert.equal(failed.status, "checks-failed");
+	assert.equal(failed.checks[0].passed, false);
+	assert.equal(failed.checks[0].exitCode, 0);
+	assert.equal(failed.checks[0].backgroundProcessesDetected, true);
+	assert.equal(failed.checks[0].processTreeReaped, true);
+	assert.equal(failed.checks[0].terminationEscalated, true);
+	const pid = Number(await readFile(pidPath, "utf8"));
+	assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+	const timeout = await integrate(value, [...args, "--timeout", "1", "--check", "exec sleep 60"]);
+	assert.equal(timeout.code, 1);
+	const expired = JSON.parse(timeout.stdout);
+	assert.equal(expired.status, "checks-failed");
+	assert.equal(expired.checks[0].timedOut, true);
+	assert.equal(expired.checks[0].passed, false);
+	assert.equal(expired.checks[0].processTreeReaped, true);
+});
+
+async function oneWriterIntegration() {
+	const value = await fixture();
+	const source = await sourceRepository();
+	const patch = await lanePatch(source, (clone) => writeFile(join(clone, "src", "a.txt"), "changed by writer\n"));
+	const writer = await childReceipt(value, { runId: randomUUID(), changedPaths: ["src/a.txt"], patch, baseCommit: source.baseCommit });
+	const reviewer = await childReceipt(value, { runId: randomUUID(), changedPaths: [] });
+	await persistHerd(value, [{ laneId: "writer", receipt: writer }, { laneId: "reviewer", receipt: reviewer }]);
+	return { value, source, args: ["apply", value.allocation.orchestrationId, "--lane", "writer", "--repo", source.cwd] };
+}
+
+const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+
+async function gitShim(value, body) {
+	const directory = join(value.stateHome, "bin");
+	await mkdir(directory);
+	const executable = (await execFileAsync("/bin/sh", ["-c", "command -v git"])).stdout.trim();
+	const script = join(directory, "git-fixture.cjs");
+	await writeFile(script, `
+		const { spawnSync, spawn } = require('node:child_process');
+		const fs = require('node:fs');
+		const args = process.argv.slice(2);
+		const realGit = ${JSON.stringify(executable)};
+		${body}
+	`);
+	await writeFile(join(directory, "git"), `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(script)} "$@"\n`);
+	await chmod(join(directory, "git"), 0o700);
+	value.env.PATH = `${directory}:${value.env.PATH}`;
+}
+
+for (const stage of ["apply", "check"]) {
+	test(`integration cancellation reaps the active ${stage} group before preserving its receipt`, { skip: process.platform === "win32", timeout: 20_000 }, async (t) => {
+		const { value, args } = await oneWriterIntegration();
+		const pidPath = join(value.stateHome, "active-processes.json");
+		const childCode = "process.on('SIGTERM', () => {}); process.send('ready'); setInterval(() => {}, 1000);";
+		const blocking = `
+			const descendant = spawn(process.execPath, ['-e', ${JSON.stringify(childCode)}], { stdio: ['ignore', 1, 2, 'ipc'] });
+			descendant.once('message', () => fs.writeFileSync(${JSON.stringify(pidPath)}, JSON.stringify({ leader: process.pid, descendant: descendant.pid })));
+		`;
+		let check = "true";
+		if (stage === "apply") {
+			await gitShim(value, `if (args[0] === 'apply' && args.includes('--index')) { ${blocking} }
+				else { const result = spawnSync(realGit, args, { stdio: 'inherit' }); process.exit(result.status ?? 1); }`);
+		} else {
+			const scriptPath = join(value.stateHome, "blocking-check.cjs");
+			await writeFile(scriptPath, `const { spawn } = require('node:child_process'); const fs = require('node:fs'); ${blocking}`);
+			check = `exec ${shellQuote(process.execPath)} ${shellQuote(scriptPath)}`;
+		}
+		const child = spawn(process.execPath, ["scripts/ox_integrate.mjs", ...args, "--check", check], { env: value.env, stdio: ["ignore", "pipe", "pipe"] });
+		let stdout = "";
+		let stderr = "";
+		child.stdout.on("data", (chunk) => { stdout += chunk; });
+		child.stderr.on("data", (chunk) => { stderr += chunk; });
+		const finished = new Promise((resolve, reject) => { child.once("error", reject); child.once("close", (code, signal) => resolve({ code, signal })); });
+		t.after(async () => {
+			const identities = JSON.parse(await readFile(pidPath, "utf8").catch(() => "{}"));
+			if (identities.leader) {
+				try { process.kill(-identities.leader, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+			}
+			if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+			await finished;
+		});
+		const deadline = Date.now() + 8_000;
+		while (!(await readFile(pidPath, "utf8").catch(() => ""))) {
+			assert.ok(Date.now() < deadline, `process did not become ready: ${stderr}`);
+			assert.equal(child.exitCode, null, stderr);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		const identities = JSON.parse(await readFile(pidPath, "utf8"));
+		const signal = stage === "apply" ? "SIGTERM" : "SIGINT";
+		child.kill(signal);
+		const termination = await finished;
+		assert.equal(termination.signal, null);
+		assert.equal(termination.code, 1, stderr);
+		const outcome = JSON.parse(stdout);
+		assert.equal(outcome.status, "evidence-failed");
+		assert.equal(outcome.cancellationSignal, signal);
+		assert.equal(outcome.finalWorkspaceSha256, null);
+		assert.match(outcome.evidenceError, /cancelled/);
+		const cleanup = stage === "apply" ? outcome.applyFailure : outcome.checks[0];
+		assert.equal(cleanup.backgroundProcessesDetected, true);
+		assert.equal(cleanup.processTreeReaped, true);
+		assert.equal(cleanup.terminationEscalated, true);
+		assert.throws(() => process.kill(identities.leader, 0), { code: "ESRCH" });
+		assert.throws(() => process.kill(identities.descendant, 0), { code: "ESRCH" });
+		await access(outcome.workspace.path);
+		const inspected = await integrate(value, ["inspect", outcome.integrationId, "--expected-sha256", outcome.receiptSha256]);
+		assert.equal(inspected.code, 0, inspected.stderr);
+		assert.deepEqual(JSON.parse(inspected.stdout), outcome);
+	});
+}
+
+test("integration reports its allocated workspace when scratch creation fails", { skip: process.platform === "win32" }, async () => {
+	const { value, args } = await oneWriterIntegration();
+	const scratchRoot = join(value.stateHome, "scratch");
+	await mkdir(scratchRoot);
+	value.env.TMPDIR = scratchRoot;
+	await gitShim(value, `
+		const result = spawnSync(realGit, args, { stdio: 'inherit' });
+		const command = args.indexOf('worktree');
+		if (result.status === 0 && command >= 0 && args[command + 1] === 'add') fs.rmSync(${JSON.stringify(scratchRoot)}, { recursive: true });
+		process.exit(result.status ?? 1);
+	`);
+	const failed = await integrate(value, [...args, "--no-check"]);
+	assert.equal(failed.code, 1);
+	const outcome = JSON.parse(failed.stdout);
+	assert.equal(outcome.status, "evidence-failed");
+	assert.match(outcome.evidenceError, /ENOENT/);
+	assert.equal(outcome.finalWorkspaceSha256, null);
+	assert.deepEqual(outcome.applied, []);
+	await access(outcome.workspace.path);
+	assert.match(outcome.cleanupCommand, new RegExp(outcome.workspace.id));
+	assert.equal(JSON.parse((await integrate(value, ["inspect", outcome.integrationId])).stdout).status, "evidence-failed");
+});
+
+test("integration validates its destination before allocation and preserves snapshot failure evidence", async () => {
+	const { value, args } = await oneWriterIntegration();
+	const destination = join(value.orchestrationStore.root, "integrations");
+	await writeFile(destination, "occupied by a regular file");
+	const blocked = await integrate(value, [...args, "--no-check"]);
+	assert.equal(blocked.code, 1);
+	await assert.rejects(access(value.workspaceState));
+	const { value: fresh, args: freshArgs } = await oneWriterIntegration();
+	const failed = await integrate(fresh, [...freshArgs, "--check", "rm .git"]);
+	assert.equal(failed.code, 1);
+	const outcome = JSON.parse(failed.stdout);
+	assert.equal(outcome.status, "evidence-failed");
+	assert.equal(outcome.finalWorkspaceSha256, null);
+	assert.equal(outcome.checks[0].passed, true);
+	assert.ok(outcome.evidenceError);
+	await access(outcome.workspace.path);
+	assert.equal(JSON.parse((await integrate(fresh, ["inspect", outcome.integrationId])).stdout).status, "evidence-failed");
 });

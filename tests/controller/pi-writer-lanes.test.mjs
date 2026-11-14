@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
+import Ajv2020 from "ajv/dist/2020.js";
 
 import { trackedMkdtemp } from "./helpers/tracked-temp.mjs";
 import { OX_DRIVER_SUPPORTS_PI_LANES } from "../../scripts/distribution.mjs";
@@ -123,12 +124,13 @@ test("the published lane schema matches the keys the validator accepts", async (
 	]);
 	assert.deepEqual(lane.properties.writerPolicy, { enum: ["read-only", "one-writer"] });
 	assert.equal(lane.additionalProperties, false);
-	assert.equal(lane.allOf.length, 6);
+	const validateSchema = new Ajv2020({ strict: false }).compile(schema);
 	// Every declared key is genuinely accepted, and an undeclared key is not.
 	const accepted = validateOrchestrationPlan({ version: 1, lanes: [
 		writerLane({ route: "opencode-default", agent: "primary", childAgents: ["researcher"], ownedPaths: ["src"], excludedPaths: ["dist"], timeoutSeconds: 600, costCeilingUsd: 0.05 }),
 		piLane({ writerPolicy: "one-writer", dependsOn: ["build"], route: "pi-protected-inherited", ownedPaths: ["docs"], excludedPaths: ["dist"], checks: ["npm test"], timeoutSeconds: 600, costCeilingUsd: 0.05 }),
 	] });
+	assert.equal(validateSchema(accepted), true, JSON.stringify(validateSchema.errors));
 	for (const key of Object.keys(lane.properties)) {
 		if (key === "harness" || key === "writerPolicy") continue;
 		assert.notEqual(accepted.lanes[1][key] ?? accepted.lanes[0][key], undefined, `${key} was dropped by the validator`);
@@ -137,6 +139,17 @@ test("the published lane schema matches the keys the validator accepts", async (
 		writerLane({ writerPolicyMode: "one-writer" }),
 		piLane(),
 	] }), /writerPolicyMode is not supported/);
+	for (const invalidLane of [
+		piLane({ agent: "unavailable-agent" }),
+		piLane({ childAgents: ["unavailable-child"] }),
+		piLane({ checks: ["npm test"] }),
+		piLane({ writerPolicy: "one-writer", ownedPaths: [] }),
+		piLane({ harness: "omp", writerPolicy: "one-writer", ownedPaths: ["src"] }),
+	]) {
+		const invalid = { version: 1, lanes: [writerLane(), invalidLane] };
+		assert.equal(validateSchema(invalid), false, JSON.stringify(invalidLane));
+		assert.throws(() => validateOrchestrationPlan(invalid));
+	}
 });
 
 test("an effective retry lane records a Pi writer and rejects one without owned paths", () => {

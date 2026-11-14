@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 
-import { loadRouteProfile } from "../../packages/core/dist/index.js";
+import Ajv2020 from "ajv/dist/2020.js";
+import { loadRouteProfile, validateRouteProfile } from "../../packages/core/dist/index.js";
 import { trackedMkdtemp } from "./helpers/tracked-temp.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -202,4 +203,76 @@ test("init-omp records paths and environment names without environment values", 
 	assert.equal(parsed.tier, "attested");
 	assert.deepEqual(parsed.runtime.environmentNames, ["PROVIDER_TOKEN"]);
 	assert.equal(JSON.stringify(parsed).includes(process.env.PROVIDER_TOKEN ?? "__missing__"), false);
+});
+
+
+test("OpenCode initializer persists launcher pins and honors the route directory environment", async () => {
+	const directory = await trackedMkdtemp(join(tmpdir(), "ox-route-pins-"));
+	const args = initArguments(directory, ["--expected-version", "1.2.3", "--expected-sha256", "a".repeat(64)]);
+	const directoryFlag = args.indexOf("--profile-dir");
+	args.splice(directoryFlag, 2);
+	const result = await execFileAsync(process.execPath, args, { env: { ...process.env, OX_DRIVER_ROUTE_PROFILE_DIR: directory } });
+	const profile = JSON.parse(await readFile(JSON.parse(result.stdout).filePath, "utf8"));
+	assert.deepEqual(profile.runtime, { expectedVersion: "1.2.3", expectedSha256: "a".repeat(64) });
+});
+
+test("forced profile replacement rejects symlinks and preserves target bytes", async () => {
+	const directory = await trackedMkdtemp(join(tmpdir(), "ox-route-symlink-"));
+	const target = join(directory, "target");
+	await writeFile(target, "preserved profile target\n");
+	await symlink(target, join(directory, "route-onboarding.json"));
+	await assert.rejects(runScript(initArguments(directory, ["--force"])), (error) => {
+		assert.match(error.stderr, /non-regular profile/);
+		return true;
+	});
+	assert.equal(await readFile(target, "utf8"), "preserved profile target\n");
+	assert.deepEqual((await readdir(directory)).sort(), ["route-onboarding.json", "target"]);
+});
+
+test("list inspects inactive and invalid routes independently without launching a harness", async () => {
+	const directory = await trackedMkdtemp(join(tmpdir(), "ox-route-list-"));
+	const route = expectedProfile("candidate-route", "/unavailable/launcher", "fixture", "fixture", "high");
+	route.status = "candidate";
+	route.runtime = { expectedVersion: "fixture-v1", expectedSha256: "b".repeat(64) };
+	await writeFile(join(directory, "candidate-route.json"), JSON.stringify(route));
+	await writeFile(join(directory, "invalid-route.json"), "{broken");
+	const result = await runScript(["scripts/ox_route.mjs", "list", "--profile-dir", directory]);
+	const summary = JSON.parse(result.stdout);
+	assert.equal(summary.modelCalls, 0);
+	assert.equal(summary.profiles.length, 2);
+	assert.deepEqual(summary.profiles[0].pins, route.runtime);
+	assert.equal(summary.profiles[0].harness, "opencode");
+	assert.equal(summary.profiles[0].status, "candidate");
+	assert.equal(summary.profiles[1].valid, false);
+	assert.match(summary.profiles[1].error, /valid UTF-8 JSON/);
+});
+
+test("route help succeeds for --help and -h", async () => {
+	for (const flag of ["--help", "-h"]) {
+		const result = await runScript(["scripts/ox_route.mjs", flag]);
+		assert.match(result.stdout, /ox_route.mjs list/);
+		assert.equal(result.stderr, "");
+	}
+});
+
+
+test("route schema and runtime agree on guarded directories, environment names, and unsupported agent fields", async () => {
+	const schema = JSON.parse(await readFile(new URL("../../schemas/route-profile.schema.json", import.meta.url), "utf8"));
+	const validate = new Ajv2020({ strict: false }).compile(schema);
+	const base = expectedProfile("fixture-route", "fixture-launcher", "fixture", "fixture", "high");
+	const cases = [
+		{ name: "plain OpenCode", value: base, accepted: true },
+		{ name: "guarded directories", value: { ...base, runtime: { mode: "guarded", agentDirectory: "/tmp/fixture-agent", homeDirectory: "/tmp/fixture-home", environmentNames: ["FIXTURE_TOKEN"] } }, accepted: true },
+		{ name: "missing guarded directories", value: { ...base, runtime: { mode: "guarded" } }, accepted: false },
+		{ name: "relative guarded directory", value: { ...base, runtime: { mode: "guarded", agentDirectory: "relative", homeDirectory: "/tmp/fixture-home" } }, accepted: false },
+		{ name: "leading underscore environment name", value: { ...base, runtime: { environmentNames: ["_FIXTURE"] } }, accepted: false },
+		{ name: "lowercase environment name", value: { ...base, runtime: { environmentNames: ["fixture"] } }, accepted: false },
+		{ name: "Pi agent profile", value: { ...base, harness: "pi", agent: { defaultProfile: "fixture-agent" } }, accepted: false },
+		{ name: "OMP agent profile", value: { ...base, harness: "omp", agent: { allowedProfiles: ["fixture-agent"] } }, accepted: false },
+	];
+	for (const fixture of cases) {
+		assert.equal(validate(fixture.value), fixture.accepted, `${fixture.name}: ${JSON.stringify(validate.errors)}`);
+		if (fixture.accepted) assert.doesNotThrow(() => validateRouteProfile(fixture.value), fixture.name);
+		else assert.throws(() => validateRouteProfile(fixture.value), undefined, fixture.name);
+	}
 });

@@ -554,13 +554,13 @@ export class RunStore {
 				detachedProcessGroup: admission.detachedProcessGroup,
 			});
 			terminations.push({ admissionId: admission.admissionId, result });
-			if (result.status === "terminated" || result.status === "already-exited" || result.status === "identity-mismatch") {
+			if (result.processTreeReaped && (result.status === "terminated" || result.status === "already-exited")) {
 				await this.#mutateAdmissionState(runId, (current) => {
 					const stored = current.processes.find((item) => item.admissionId === admission.admissionId);
 					if (!stored || stored.status !== "running") return;
 					stored.status = "exited";
 					stored.exitCode = null;
-					stored.terminationSignal = result.status === "identity-mismatch" ? "identity-replaced" : reason;
+					stored.terminationSignal = reason;
 					stored.completedAt = new Date().toISOString();
 				});
 			} else {

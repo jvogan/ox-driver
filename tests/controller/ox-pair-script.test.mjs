@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -15,11 +15,12 @@ const PAIR_STDERR_SECRET = "PAIR_STDERR_SECRET_MUST_NOT_REACH_AGGREGATE";
 const FOREIGN_RECEIPT_RUN_ID = `${"1".repeat(8)}-1111-4111-8111-${"1".repeat(12)}`;
 const FOREIGN_MARKER_RUN_ID = `${"2".repeat(8)}-2222-4222-8222-${"2".repeat(12)}`;
 
-async function fixtureRunner() {
+async function fixtureRunner(readinessDirectory) {
 	const root = await trackedMkdtemp(join(tmpdir(), "ox-pair-runner-"));
 	const runner = join(root, "runner.mjs");
 	await writeFile(runner, `
-import { basename } from "node:path";
+import { mkdirSync } from "node:fs";
+import { basename, join } from "node:path";
 const worker = process.argv[2];
 const name = basename(worker);
 if (name.includes("slow")) {
@@ -34,6 +35,8 @@ if (name.includes("slow")) {
   };
   process.on("SIGTERM", finish);
   process.on("SIGINT", finish);
+  const readinessDirectory = ${JSON.stringify(readinessDirectory ?? null)};
+  if (readinessDirectory) mkdirSync(join(readinessDirectory, name));
   setInterval(() => {}, 1000);
 }
 else if (name.includes("invalid")) {
@@ -215,9 +218,10 @@ test("pair records an exceeded report-only cost target without invalidating comp
 	assert.equal(result.receipt.status, "completed");
 });
 
-test("pair turns SIGINT into child cancellation and a final aggregate receipt", async () => {
+test("pair turns SIGINT into child cancellation and a final aggregate receipt", async (t) => {
 	const workerPaths = await workers("slow-alpha", "slow-beta");
-	const runner = await fixtureRunner();
+	const readinessDirectory = await trackedMkdtemp(join(tmpdir(), "ox-pair-ready-"));
+	const runner = await fixtureRunner(readinessDirectory);
 	const state = await trackedMkdtemp(join(tmpdir(), "ox-pair-cancel-state-"));
 	const child = spawn(process.execPath, [
 		"scripts/ox_pair.mjs", "wait for cancellation",
@@ -232,19 +236,33 @@ test("pair turns SIGINT into child cancellation and a final aggregate receipt", 
 	let stderr = "";
 	child.stdout.on("data", (chunk) => { stdout += chunk; });
 	child.stderr.on("data", (chunk) => { stderr += chunk; });
-	// A fixed delay races module loading under suite load and the signal kills
-	// the process before its handlers exist. The allocation marker is printed
-	// only after the signal handlers are installed.
-	for (let attempt = 0; attempt < 400 && !stderr.includes("OX_DRIVER_ORCHESTRATION_ID="); attempt += 1) {
-		await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
-	}
-	assert.ok(stderr.includes("OX_DRIVER_ORCHESTRATION_ID="), `pair never allocated: ${stderr}`);
-	await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));
-	child.kill("SIGINT");
-	const { code, signal } = await new Promise((resolveClose, rejectClose) => {
+	const closed = new Promise((resolveClose, rejectClose) => {
 		child.once("error", rejectClose);
 		child.once("close", (exitCode, exitSignal) => resolveClose({ code: exitCode, signal: exitSignal }));
 	});
+	t.after(async () => {
+		if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+		await closed;
+	});
+	// Each runner publishes readiness only after installing its signal handlers.
+	// Allocation alone does not prove that either child can return a receipt.
+	await Promise.all(["slow-alpha", "slow-beta"].map(async (name) => {
+		const deadline = Date.now() + 10_000;
+		for (;;) {
+			try {
+				await access(join(readinessDirectory, name));
+				return;
+			} catch (error) {
+				if (error.code !== "ENOENT") throw error;
+			}
+			assert.ok(child.exitCode === null && child.signalCode === null, `pair exited before ${name} was ready: ${stderr}`);
+			assert.ok(Date.now() < deadline, `${name} never became ready: ${stderr}`);
+			await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+		}
+	}));
+	assert.ok(stderr.includes("OX_DRIVER_ORCHESTRATION_ID="), `pair never allocated: ${stderr}`);
+	assert.equal(child.kill("SIGINT"), true);
+	const { code, signal } = await closed;
 	assert.equal(signal, null, stderr);
 	assert.equal(code, 1);
 	const receipt = JSON.parse(stdout);

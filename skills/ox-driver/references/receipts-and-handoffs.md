@@ -31,15 +31,39 @@ the matching `kind`. A team receipt uses the existing `herd` kind for schema
 compatibility. The aggregate links child run identifiers, dependencies,
 worktrees, attempts, effective routes, costs, changed paths, checks, and
 terminal states.
-Integration reads those aggregates and writes none of its own; `ox_integrate.mjs`
-prints its proposal and apply results to stdout.
+Integration reads those aggregates. Proposals print to stdout; apply saves a
+separate integration receipt and prints its identifier, digest, and result.
 
 Inspect a finalized orchestration:
 
 ```bash
 node scripts/ox_orchestration.mjs inspect ORCHESTRATION_ID
 node scripts/ox_orchestration.mjs report ORCHESTRATION_ID
+node scripts/ox_orchestration.mjs report ORCHESTRATION_ID --resolved
 ```
+
+`--resolved` follows the selected receipt's parent chain and combines each
+root lane's latest attempt. It preserves attempt history and deduplicates
+cumulative costs by run identifier. Unknown costs remain unknown, and a later
+failed attempt supersedes an earlier success. Missing or inconsistent lineage
+fails the report.
+
+## Integration receipts
+
+An integration receipt records selected lane and run identifiers, patch hashes,
+the source and base commit, applied patches, declared checks, check results,
+process cleanup, and the final Git-visible workspace digest. It uses the
+`integration` kind and remains separate from dispatch receipts.
+
+```bash
+node scripts/ox_integrate.mjs inspect INTEGRATION_ID --expected-sha256 DIGEST
+```
+
+The command verifies stored content and its expected digest. It reads the saved
+snapshot without checking the current worktree. Apply preserves a failed
+worktree and reports `checks-failed`, `apply-failed`, or `evidence-failed`.
+If receipt storage fails, the printed result marks the receipt unavailable
+and includes the workspace identity.
 
 Archive bounded receipt evidence for another host or session:
 

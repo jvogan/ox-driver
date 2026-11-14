@@ -95,7 +95,7 @@
           "type": "array",
           "maxItems": 64,
           "uniqueItems": true,
-          "items": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" }
+          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }
         },
         "expectedVersion": { "type": "string", "minLength": 1, "maxLength": 128 },
         "expectedSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
@@ -110,5 +110,11 @@
     "pricingPolicy": { "enum": ["report-only", "from-launcher", "zero-only"] },
     "credentialPolicy": { "type": "string", "minLength": 1, "maxLength": 512 },
     "notice": { "type": "string", "minLength": 1, "maxLength": 4096 }
-  }
+  },
+  "allOf": [
+    {
+      "if": { "required": ["harness"], "properties": { "harness": { "enum": ["pi", "omp"] } } },
+      "then": { "properties": { "agent": false } }
+    }
+  ]
 }

@@ -27,6 +27,10 @@ Use provider, model, and reasoning values supported by the installed launcher.
 The initializer validates profile shape. The first paid task verifies that the
 launcher can reach the selected route.
 
+Add `--expected-version` or `--expected-sha256` to pin the launcher. Doctor
+checks the digest before executing the launcher and verifies the version text.
+Dispatch verifies the launcher identity before and after execution.
+
 Use `--agent PROFILE` to set a default OpenCode agent. Use `--id PROFILE_ID`
 and `--route PROFILE_ID` when keeping several reviewed routes. Keep a route
 profile unchanged while active or retryable runs reference its digest.

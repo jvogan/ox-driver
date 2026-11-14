@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { PiAdapter } from "../../packages/adapters/pi/dist/index.js";
 import { RunStore } from "../../packages/core/dist/index.js";
 import { createController, createStateController, handoffRuntime } from "../../packages/cli/dist/runtime.js";
 import { trackedMkdtemp } from "./helpers/tracked-temp.mjs";
@@ -212,4 +213,56 @@ test("createStateController does not resolve route profiles or adapters", async 
 		restoreEnvironment("OX_DRIVER_STATE_DIR", previousState);
 		restoreEnvironment("OX_DRIVER_OPENCODE_PROFILE", previousProfile);
 	}
+});
+
+
+test("targeted doctor ignores unrelated malformed route defaults and --all reports each failure", async () => {
+	const directory = await trackedMkdtemp(join(tmpdir(), "ox-doctor-isolation-"));
+	await writeFile(join(directory, "malformed.json"), "{broken");
+	const env = { XDG_DATA_HOME: directory, OX_DRIVER_ROUTE_PROFILE_DIR: directory, OX_DRIVER_OPENCODE_PROFILE: "missing-opencode", OX_DRIVER_PI_PROFILE: "malformed", OX_DRIVER_OMP_PROFILE: "malformed" };
+	for (const harness of ["acp", "dsh"]) {
+		const result = await runCli(["doctor", harness], env);
+		assert.equal(result.exitCode, 0, result.stderr);
+		const reports = JSON.parse(result.stdout);
+		assert.equal(reports.length, 1);
+		assert.equal(reports[0].harness, harness);
+		assert.doesNotMatch(JSON.stringify(reports), /malformed|missing-opencode/);
+	}
+	const result = await runCli(["doctor", "--all"], env);
+	assert.equal(result.exitCode, 0, result.stderr);
+	const reports = JSON.parse(result.stdout);
+	assert.deepEqual(reports.map((report) => report.harness), ["opencode", "pi", "omp", "acp", "dsh"]);
+	for (const report of reports.slice(0, 3)) {
+		assert.equal(report.available, false);
+		assert.equal(report.compatibility, "blocked");
+	}
+	assert.match(reports[0].notices[0], /missing-opencode/);
+	assert.match(reports[1].notices[0], /valid UTF-8 JSON/);
+	const launcher = join(directory, "pi-fixture");
+	await writeFile(launcher, "#!/bin/sh\nprintf '%s\\n' 'pi fixture'\n", { mode: 0o700 });
+	await writeFile(join(directory, "pi-fixture.json"), JSON.stringify({
+		version: 1, id: "pi-fixture", status: "active", harness: "pi", tier: "trusted-host",
+		launcher: { command: launcher, versionArgs: ["--version"] },
+		route: { source: "explicit", provider: "fixture", model: "fixture", reasoning: "high" },
+		runtime: { mode: "direct" }, pricingPolicy: "report-only",
+	}));
+	const selectedPi = await runCli(["doctor", "pi"], { ...env, OX_DRIVER_PI_PROFILE: "pi-fixture" });
+	assert.equal(selectedPi.exitCode, 0, selectedPi.stderr);
+	const [piReport] = JSON.parse(selectedPi.stdout);
+	assert.equal(piReport.available, true, piReport.notices.join("; "));
+	assert.equal(piReport.probe.modelCalls, 0);
+});
+
+test("direct Pi doctor honors an explicit launcher override", async () => {
+	const directory = await trackedMkdtemp(join(tmpdir(), "ox-pi-launcher-override-"));
+	const launcher = join(directory, "pi-fixture");
+	await writeFile(launcher, "#!/bin/sh\nprintf '%s\\n' 'pi fixture override'\n", { mode: 0o700 });
+	const adapter = new PiAdapter({
+		launcher,
+		profile: { version: 1, id: "pi-fixture", status: "active", harness: "pi", tier: "trusted-host", launcher: { command: "/missing/profile-launcher", versionArgs: ["--version"] }, route: { source: "explicit", provider: "fixture", model: "fixture", reasoning: "high" }, runtime: { mode: "direct", expectedVersion: "fixture override" }, pricingPolicy: "report-only", filePath: "/profiles/pi-fixture.json", sha256: "a".repeat(64) },
+	});
+	const report = await adapter.doctor();
+	assert.equal(report.available, true, report.notices.join("; "));
+	assert.equal(report.executable, launcher);
+	assert.match(report.harnessVersion, /fixture override/);
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, writeFile } from "node:fs/promises";
+import { appendFile, chmod, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -319,4 +319,45 @@ test("retains parent-context truncation as telemetry without discarding structur
 	const result = inspectDelegationEvidence(value.input);
 	assert.equal(result.usage.complete, true);
 	assert.equal(result.evidence.sessions[1].outputTruncated, true);
+});
+
+test("OpenCode rejects a mismatched digest before invoking version or doctor probes", async () => {
+	const root = await trackedMkdtemp(join(tmpdir(), "ox-opencode-pin-order-"));
+	const launcher = join(root, "launcher");
+	const marker = join(root, "invoked");
+	await writeFile(launcher, `#!/bin/sh\nprintf invoked > '${marker}'\nprintf 'opencode fixture\\n'\n`, { mode: 0o700 });
+	const route = profile("route-a", launcher, "fixture", "fixture", "high", "builder-a");
+	route.runtime = { expectedSha256: "0".repeat(64) };
+	const report = await new OpenCodeAdapter({ profile: route }).doctor();
+	assert.equal(report.available, false);
+	assert.match(report.notices.join(" "), /digest differs/);
+	await assert.rejects(import("node:fs/promises").then(({ access }) => access(marker)), { code: "ENOENT" });
+});
+
+test("OpenCode enforces expected version before optional probes", async () => {
+	const launcher = await launcherFixture();
+	const route = profile("route-a", launcher, "fixture", "fixture", "high", "builder-a");
+	route.runtime = { expectedVersion: "unavailable-version" };
+	const report = await new OpenCodeAdapter({ profile: route }).doctor();
+	assert.equal(report.available, false);
+	assert.match(report.notices.join(" "), /version output did not contain unavailable-version/);
+});
+
+test("OpenCode rejects launcher drift after qualification before dispatch", async () => {
+	const launcher = await launcherFixture();
+	const route = profile("route-a", launcher, "fixture", "fixture", "high", "builder-a");
+	const adapter = new OpenCodeAdapter({ profile: route });
+	const doctor = await adapter.doctor();
+	assert.equal(doctor.available, true);
+	await writeFile(launcher, "#!/bin/sh\nprintf 'opencode changed\\n'\n", { mode: 0o700 });
+	await assert.rejects(adapter.run(spec(import.meta.dirname, route.id, "builder-a"), { doctor }), /evidence changed after preflight/);
+});
+
+
+test("OpenCode fails a completed response when the launcher changes during execution", async () => {
+	const launcher = await launcherFixture();
+	await appendFile(launcher, '\nprintf "%s\\n" "# fixture changed" >> "$0"\n');
+	const result = await runProfile(profile("route-a", launcher, "fixture", "fixture", "high", "builder-a"));
+	assert.equal(result.receipt.status, "failed");
+	assert.match(result.receipt.notices.join("\n"), /launcher digest differs/);
 });

@@ -8,6 +8,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import {
 	buildOrchestrationReport,
 	OrchestrationReceiptStore,
+	resolveOrchestrationReceipt,
 	RunStore,
 } from "../packages/core/dist/index.js";
 import { retryOrchestration } from "./orchestration-retry.mjs";
@@ -191,10 +192,11 @@ async function main() {
 		return;
 	}
 	if (command === "report") {
-		if (extra !== undefined) fail(`unexpected argument: ${extra}`);
-		if (!argument) fail("usage: ox_orchestration.mjs report ID");
+		if (!argument || arguments_.length > 2 || (extra !== undefined && extra !== "--resolved")) fail("usage: ox_orchestration.mjs report ID [--resolved]");
 		const receipt = await store.inspect(argument);
-		const report = await buildOrchestrationReport(receipt, runStore());
+		const runs = runStore();
+		const view = extra === "--resolved" ? await resolveOrchestrationReceipt(receipt, store, runs) : receipt;
+		const report = await buildOrchestrationReport(view, runs);
 		process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 		if (!report.childReceiptsComplete) process.exitCode = 2;
 		return;

@@ -217,7 +217,7 @@ function workerReport(index: number, worker: Record<string, unknown>, resolution
 	};
 	if (typeof worker.finalOutputPreview === "string") result.finalOutputPreview = worker.finalOutputPreview;
 	if (record(worker.finalOutputEvidence)) result.finalOutputEvidence = worker.finalOutputEvidence as Record<string, unknown>;
-	for (const field of ["previousRunId", "previousOrchestrationId", "previousReceiptPath", "previousStatus", "workspaceStateLink", "continuationContextPreview"] as const) {
+	for (const field of ["previousRunId", "previousOrchestrationId", "previousReceiptPath", "previousStatus", "workspaceStateLink", "continuationContextPreview", "sourceOrchestrationId", "sourceReceiptPath", "attemptNumber"] as const) {
 		if (typeof worker[field] === "string") result[field] = worker[field];
 	}
 	if (Number.isSafeInteger(worker.attemptNumber)) result.attemptNumber = worker.attemptNumber;
@@ -276,7 +276,7 @@ export async function buildOrchestrationReport(
 	const childReceiptsComplete = workers.every((worker) => worker.error === undefined);
 	const observedCosts = workers.map((worker) => record(worker.costReport)?.observedUsdMicros);
 	const reportedAggregate = receipt.aggregateCostUsdMicros;
-	const aggregateCostUsdMicros: number | null = typeof reportedAggregate === "number"
+	const aggregateCostUsdMicros: number | null = receipt.resolution && reportedAggregate === null ? null : typeof reportedAggregate === "number"
 		&& Number.isSafeInteger(reportedAggregate) && reportedAggregate >= 0
 		? reportedAggregate
 		: observedCosts.length > 0 && observedCosts.every((cost) => Number.isSafeInteger(cost) && Number(cost) >= 0)
@@ -312,6 +312,7 @@ export async function buildOrchestrationReport(
 		...(Array.isArray(receipt.reviewerAttempts) ? { reviewerAttempts: receipt.reviewerAttempts } : {}),
 		...(Array.isArray(receipt.orchestrationAttempts) ? { orchestrationAttempts: receipt.orchestrationAttempts } : {}),
 		...retryFields,
+		...(record(receipt.resolution) ? { resolution: receipt.resolution } : {}),
 		...(workspace ? { workspace } : {}),
 		workers,
 	});

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 
@@ -148,9 +148,13 @@ export async function terminateProcessIdentity(
 	identity: DurableProcessIdentity,
 	options: { detachedProcessGroup?: boolean; graceMilliseconds?: number } = {},
 ): Promise<ProcessTerminationResult> {
+	const detached = options.detachedProcessGroup === true;
+	if (detached && (process.platform === "win32" || identity.processGroupId !== identity.pid)) {
+		return { status: "unverifiable", processTreeReaped: false, terminationEscalated: false };
+	}
 	const initial = await processIdentityStatus(identity);
 	if (initial === "missing") {
-		return { status: "already-exited", processTreeReaped: true, terminationEscalated: false };
+		return { status: "already-exited", processTreeReaped: !detached || !processGroupExists(identity.pid), terminationEscalated: false };
 	}
 	if (initial === "reused") {
 		return { status: "identity-mismatch", processTreeReaped: false, terminationEscalated: false };
@@ -158,16 +162,12 @@ export async function terminateProcessIdentity(
 	if (initial !== "same") {
 		return { status: "unverifiable", processTreeReaped: false, terminationEscalated: false };
 	}
-	const detached = options.detachedProcessGroup === true;
-	if (detached && (process.platform === "win32" || identity.processGroupId !== identity.pid)) {
-		return { status: "unverifiable", processTreeReaped: false, terminationEscalated: false };
-	}
 	const target = detached ? -identity.pid : identity.pid;
 	try {
 		process.kill(target, "SIGTERM");
 	} catch (error) {
 		if (processMissing(error)) {
-			return { status: "already-exited", processTreeReaped: true, terminationEscalated: false };
+			return { status: "already-exited", processTreeReaped: !detached || !processGroupExists(identity.pid), terminationEscalated: false };
 		}
 		return { status: "unverifiable", processTreeReaped: false, terminationEscalated: false };
 	}
@@ -210,7 +210,7 @@ function processGroupExists(processGroupId: number): boolean {
 		process.kill(-processGroupId, 0);
 		return true;
 	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === "EPERM";
+		return !processMissing(error);
 	}
 }
 
@@ -250,4 +250,128 @@ export async function reapDetachedProcessGroup(processGroupId: number | undefine
 		processTreeReaped: await waitForProcessGroupExit(processGroupId, 2_000),
 		terminationEscalated: true,
 	};
+}
+
+export interface OwnedProcessResult extends ProcessTreeCleanup {
+	exitCode: number | null;
+	stdout: string;
+	stderr: string;
+	stdoutTruncated: boolean;
+	stderrTruncated: boolean;
+}
+
+/** Run a directly owned child and reap its detached group as soon as the leader exits. */
+export async function runOwnedProcess(
+	command: string,
+	args: string[],
+	options: {
+		cwd: string;
+		env?: NodeJS.ProcessEnv;
+		signal?: AbortSignal;
+		outputLimitBytes?: number;
+		outputMode?: "head" | "tail";
+	},
+): Promise<OwnedProcessResult> {
+	if (options.outputLimitBytes !== undefined && (!Number.isSafeInteger(options.outputLimitBytes) || options.outputLimitBytes < 0)) {
+		throw new Error("process output limit must be a non-negative safe integer");
+	}
+	if (options.signal?.aborted) {
+		return { exitCode: null, stdout: "", stderr: "", stdoutTruncated: false, stderrTruncated: false,
+			backgroundProcessesDetected: false, processTreeReaped: true, terminationEscalated: false };
+	}
+	return new Promise((resolveProcess, rejectProcess) => {
+		const child = spawn(command, args, {
+			cwd: options.cwd, env: options.env, stdio: ["ignore", "pipe", "pipe"],
+			detached: process.platform !== "win32",
+		});
+		const limit = options.outputLimitBytes ?? 1024 * 1024;
+		let stdout: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+		let stderr: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+		let stdoutTruncated = false;
+		let stderrTruncated = false;
+		let settled = false;
+		let exited = false;
+		let closed = false;
+		let escalated = false;
+		let forceKillTimer: NodeJS.Timeout | undefined;
+		let deadlineTimer: NodeJS.Timeout | undefined;
+		let drainTimer: NodeJS.Timeout | undefined;
+		let onClosed: (() => void) | undefined;
+		const append = (current: Buffer, chunk: Buffer): Buffer => {
+			if (limit === 0) return Buffer.alloc(0);
+			if (options.outputMode === "tail") return Buffer.concat([current, chunk]).subarray(-limit);
+			if (current.length >= limit) return current;
+			return Buffer.concat([current, chunk.subarray(0, limit - current.length)]);
+		};
+		child.stdout.on("data", (chunk: Buffer) => {
+			stdoutTruncated ||= stdout.length + chunk.length > limit;
+			stdout = append(stdout, chunk);
+		});
+		child.stderr.on("data", (chunk: Buffer) => {
+			stderrTruncated ||= stderr.length + chunk.length > limit;
+			stderr = append(stderr, chunk);
+		});
+		const signalChild = (signal: NodeJS.Signals): void => {
+			if (!child.pid) return;
+			try {
+				if (process.platform === "win32") child.kill(signal);
+				else process.kill(-child.pid, signal);
+			} catch { /* Cleanup evidence is determined by the subsequent exit checks. */ }
+		};
+		const dispose = (): void => {
+			if (forceKillTimer) clearTimeout(forceKillTimer);
+			if (deadlineTimer) clearTimeout(deadlineTimer);
+			if (drainTimer) clearTimeout(drainTimer);
+			options.signal?.removeEventListener("abort", terminate);
+			child.stdout.destroy();
+			child.stderr.destroy();
+		};
+		const finish = (exitCode: number | null, cleanup: ProcessTreeCleanup): void => {
+			if (settled) return;
+			settled = true;
+			dispose();
+			child.unref();
+			resolveProcess({ exitCode, stdout: stdout.toString("utf8"), stderr: stderr.toString("utf8"),
+				stdoutTruncated, stderrTruncated, ...cleanup,
+				terminationEscalated: escalated || cleanup.terminationEscalated });
+		};
+		const terminate = (): void => {
+			if (settled || exited || forceKillTimer) return;
+			signalChild("SIGTERM");
+			forceKillTimer = setTimeout(() => {
+				escalated = true;
+				signalChild("SIGKILL");
+				deadlineTimer = setTimeout(() => finish(null, {
+					backgroundProcessesDetected: false, processTreeReaped: false, terminationEscalated: true,
+				}), 2_000);
+			}, 5_000);
+		};
+		options.signal?.addEventListener("abort", terminate, { once: true });
+		child.once("error", (error) => {
+			if (settled) return;
+			settled = true;
+			dispose();
+			rejectProcess(error);
+		});
+		child.once("close", () => { closed = true; onClosed?.(); });
+		child.once("exit", async (code) => {
+			exited = true;
+			if (forceKillTimer) clearTimeout(forceKillTimer);
+			if (deadlineTimer) clearTimeout(deadlineTimer);
+			const cleanup = await reapDetachedProcessGroup(child.pid);
+			if (settled) return;
+			if (!closed) {
+				await new Promise<void>((resolveDrain) => {
+					onClosed = resolveDrain;
+					drainTimer = setTimeout(resolveDrain, 250);
+				});
+			}
+			// Open pipes after group cleanup can indicate a descendant escaped the group.
+			if (!closed) {
+				cleanup.backgroundProcessesDetected = true;
+				cleanup.processTreeReaped = false;
+			}
+			finish(code, cleanup);
+		});
+	});
 }

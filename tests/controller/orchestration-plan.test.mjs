@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
+import Ajv2020 from "ajv/dist/2020.js";
 
 import {
 	MAX_ORCHESTRATION_PLAN_LANES,
@@ -146,4 +148,22 @@ test("accepts dependency-ordered shared worktrees and rejects cycles", () => {
 		lane({ harness: "pi", dependsOn: ["review"] }),
 		lane({ id: "review", role: "reviewer", harness: "pi", workerPath: "/tmp/worktrees/review", dependsOn: ["build"] }),
 	])), /dependency cycle/);
+});
+
+
+test("orchestration schema and runtime agree on Pi and OMP agent selection", async () => {
+	const schema = JSON.parse(await readFile(new URL("../../schemas/orchestration-plan.schema.json", import.meta.url), "utf8"));
+	const validate = new Ajv2020({ strict: false }).compile(schema);
+	for (const harness of ["opencode", "pi", "omp"]) {
+		for (const selectAgent of [false, true]) {
+			const value = plan([
+				lane({ harness, ...(selectAgent ? { agent: "fixture-agent" } : {}) }),
+				lane({ id: "review", role: "reviewer", workerPath: "/tmp/worktrees/review" }),
+			]);
+			const accepted = harness === "opencode" || !selectAgent;
+			assert.equal(validate(value), accepted, `${harness}: ${JSON.stringify(validate.errors)}`);
+			if (accepted) assert.doesNotThrow(() => validateOrchestrationPlan(value));
+			else assert.throws(() => validateOrchestrationPlan(value), /agent is unavailable/);
+		}
+	}
 });

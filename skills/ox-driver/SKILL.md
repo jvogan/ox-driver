@@ -53,10 +53,11 @@ unavailable.
 
 ## Check routes before dispatch
 
-List every adapter without making a model request:
+Inspect adapters and list configured routes without making a model request:
 
 ```bash
 node packages/cli/dist/main.js doctor --all
+node scripts/ox_route.mjs list
 ```
 
 Require the selected harness to report `available: true`, a configured route,
@@ -81,6 +82,10 @@ node scripts/ox_route.mjs init-omp \
 Use values supported by the installed harness. Route profiles contain route
 identity and launcher configuration. Harness authentication remains outside
 the profile.
+
+Add `--expected-version` or `--expected-sha256` to pin the launcher. A digest
+mismatch blocks launcher execution. Route listing reports invalid profiles
+individually and runs no launcher.
 
 ## Run one OpenCode task
 
@@ -276,6 +281,7 @@ dependencies, agents, scopes, checks, timeouts, or cost targets:
 ```
 
 ```bash
+node scripts/ox_team.mjs validate /absolute/path/to/lanes.json
 node scripts/ox_team.mjs run /absolute/path/to/lanes.json --concurrency 4
 ```
 
@@ -284,6 +290,11 @@ A lane plan gives every worker a named role. An OpenCode lane may declare
 `"writerPolicy": "one-writer"` with at least one `ownedPaths` entry. An OMP
 lane stays read-only. A dependent lane receives bounded evidence and output
 from each completed dependency.
+
+`validate` resolves plan rules, route profiles, runner identities, worktree
+paths, and dependency order without allocating or dispatching work. `run
+--dry-run` performs the same validation. Qualify installed harnesses separately
+with `doctor`.
 
 `ox_team.mjs run` writes `OX_DRIVER_ORCHESTRATION_ID=ID` to stderr at allocation and
 the aggregate receipt to stdout at the end. Use that identifier for every step
@@ -335,7 +346,7 @@ below.
 
 `schemas/orchestration-plan.schema.json` holds the machine-readable shape.
 
-## Pick a winner and land it
+## Select and integrate work
 
 Read what every lane produced:
 
@@ -371,10 +382,18 @@ node scripts/ox_integrate.mjs apply ORCHESTRATION_ID \
 
 Apply creates a managed worktree at the selected lanes' shared base commit,
 applies each patch with `git apply --index`, then runs the checks there. It
-reports `integrated`, `checks-failed`, or `apply-failed` with the worktree path
+reports `integrated`, `checks-failed`, `apply-failed`, or `evidence-failed` with the worktree path
 and a cleanup command. Selected lanes must not overlap on a path and must share
 one recorded base commit. Apply requires at least one `--check` or explicit
 `--no-check`, and never writes to the source repository.
+
+Apply saves an integration receipt containing selected runs, patch hashes,
+checks, cleanup evidence, and the final workspace digest. Inspect its printed
+identifier and digest with:
+
+```bash
+node scripts/ox_integrate.mjs inspect INTEGRATION_ID --expected-sha256 DIGEST
+```
 
 Export one lane's patch directly:
 
@@ -400,6 +419,11 @@ Retry only incomplete lanes. Preserve the effective route, agent, scope,
 checks, timeout, cost target, worktree, and prior failed-check context.
 Dependency-connected retries keep their order, receive the latest completed
 upstream evidence, and reuse the newest upstream workspace digest.
+
+Use `report ORCHESTRATION_ID --resolved` to combine every root lane's latest
+attempt across the selected retry chain. The report preserves attempt history
+and cumulative known and unknown costs. Later failures remain visible. Add
+`--resolved` to `propose`, `export`, or `apply` to use those combined results.
 
 Inspect a run or request cancellation:
 

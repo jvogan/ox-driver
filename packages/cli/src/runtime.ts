@@ -14,6 +14,7 @@ import {
 	OxController,
 	RunStore,
 	officialTargetAdapterBindings,
+	type HarnessCapabilities,
 	type ResolvedRouteProfile,
 	type RunSpec,
 } from "@ox-driver/core";
@@ -75,7 +76,7 @@ async function defaultHarnessProfile(
 		try {
 			return await resolveRouteProfile(candidate, { expectedHarness: harness });
 		} catch (error) {
-			if (!String(error).includes("was not found in:")) throw error;
+			if (selected || !String(error).includes("was not found in:")) throw error;
 		}
 	}
 	return undefined;
@@ -138,24 +139,29 @@ export async function createController(
 	options: ControllerFactoryOptions = {},
 ): Promise<{ controller: OxController; piAdapter: PiAdapter }> {
 	const registry = new AdapterRegistry({ approvedAdapters: officialTargetAdapterBindings });
-	const piProfile = spec?.harness === "pi" && spec.routeProfile
+	const selected = spec?.harness;
+	const piProfile = selected && selected !== "pi" ? undefined : spec?.harness === "pi" && spec.routeProfile
 		? await requestedHarnessProfile(spec.routeProfile, "pi", spec.tier)
 		: await defaultHarnessProfile("pi", ["pi-default", "pi-protected-inherited"]);
 	const piAdapter = new PiAdapter({
 		...(piProfile ? { profile: piProfile } : {}),
 		...(options.piTrustedHostDispatch || piProfile?.runtime?.mode === "direct" ? { enableTrustedHostDispatch: true } : {}),
 	});
-	registry.register(piAdapter);
-	const ompProfile = spec?.harness === "omp" && spec.routeProfile
-		? await requestedHarnessProfile(spec.routeProfile, "omp", spec.tier, "omp-explicit-isolated")
-		: await defaultHarnessProfile("omp", ["omp-default", "omp-explicit-isolated"]);
-	registry.register(new OmpAdapter(ompProfile ? ompOptionsFromProfile(ompProfile) : {}));
-	registry.register(new AcpAdapter());
-	const dshRoot = join(dataHome(), "ox-driver", "harnesses", "dsh", "current");
-	registry.register(new DshAdapter({
-		root: dshRoot,
-		...(process.env.OX_DRIVER_DSH_LAUNCHER?.trim() ? { launcher: process.env.OX_DRIVER_DSH_LAUNCHER.trim() } : {}),
-	}));
+	if (!selected || selected === "pi") registry.register(piAdapter);
+	if (!selected || selected === "omp") {
+		const ompProfile = spec?.harness === "omp" && spec.routeProfile
+			? await requestedHarnessProfile(spec.routeProfile, "omp", spec.tier, "omp-explicit-isolated")
+			: await defaultHarnessProfile("omp", ["omp-default", "omp-explicit-isolated"]);
+		registry.register(new OmpAdapter(ompProfile ? ompOptionsFromProfile(ompProfile) : {}));
+	}
+	if (!selected || selected === "acp") registry.register(new AcpAdapter());
+	if (!selected || selected === "dsh") {
+		const dshRoot = join(dataHome(), "ox-driver", "harnesses", "dsh", "current");
+		registry.register(new DshAdapter({
+			root: dshRoot,
+			...(process.env.OX_DRIVER_DSH_LAUNCHER?.trim() ? { launcher: process.env.OX_DRIVER_DSH_LAUNCHER.trim() } : {}),
+		}));
+	}
 	if (spec?.harness === "opencode") {
 		if (!spec.routeProfile) throw new Error("OpenCode RunSpecs require routeProfile");
 		const openCodeProfile = await resolveRouteProfile(spec.routeProfile, { expectedHarness: "opencode", expectedTier: spec.tier });
@@ -174,6 +180,36 @@ export async function createController(
 		controller: new OxController(registry, stateRoot ? new RunStore(stateRoot) : new RunStore()),
 		piAdapter,
 	};
+}
+
+export async function doctorHarnesses(harness?: string): Promise<HarnessCapabilities[]> {
+	const harnesses = ["opencode", "pi", "omp", "acp", "dsh"];
+	if (harness && !harnesses.includes(harness)) throw new Error(`unknown harness: ${harness}`);
+	return Promise.all((harness ? [harness] : harnesses).map(async (selectedHarness) => {
+		try {
+			switch (selectedHarness) {
+				case "opencode": return await new OpenCodeAdapter({ profile: await defaultOpenCodeProfile(),
+					...(process.env.OX_DRIVER_OPENCODE_LAUNCHER?.trim() ? { launcher: process.env.OX_DRIVER_OPENCODE_LAUNCHER.trim() } : {}) }).doctor();
+				case "pi": {
+					const profile = await defaultHarnessProfile("pi", ["pi-default", "pi-protected-inherited"]);
+					return await new PiAdapter({ ...(profile ? { profile } : {}),
+						...(profile?.runtime?.mode === "direct" ? { enableTrustedHostDispatch: true } : {}) }).doctor();
+				}
+				case "omp": {
+					const profile = await defaultHarnessProfile("omp", ["omp-default", "omp-explicit-isolated"]);
+					return await new OmpAdapter(profile ? ompOptionsFromProfile(profile) : {}).doctor();
+				}
+				case "acp": return await new AcpAdapter().doctor();
+				case "dsh": return await new DshAdapter({ root: join(dataHome(), "ox-driver", "harnesses", "dsh", "current"),
+					...(process.env.OX_DRIVER_DSH_LAUNCHER?.trim() ? { launcher: process.env.OX_DRIVER_DSH_LAUNCHER.trim() } : {}) }).doctor();
+				default: throw new Error(`unknown harness: ${selectedHarness}`);
+			}
+		} catch (error) {
+			return { version: 1 as const, adapterId: officialTargetAdapterBindings.find((binding) => binding.harness === selectedHarness)!.adapterId, harness: selectedHarness,
+				compatibility: "blocked" as const, available: false, capabilities: {},
+				notices: [error instanceof Error ? error.message : String(error), "Route configuration failed before a model call."] };
+		}
+	}));
 }
 
 export function createStateController(): OxController {

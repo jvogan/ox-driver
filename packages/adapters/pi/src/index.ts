@@ -252,8 +252,8 @@ function directProfileRoute(profile: Readonly<ResolvedRouteProfile>): Configured
 	return { provider: profile.route.provider, model: profile.route.model, reasoning: profile.route.reasoning };
 }
 
-async function discoverDirectInstallation(profile: Readonly<ResolvedRouteProfile>): Promise<DirectPiInstallation> {
-	const launcher = await resolveExecutable(profile.launcher.command);
+async function discoverDirectInstallation(profile: Readonly<ResolvedRouteProfile>, command = profile.launcher.command): Promise<DirectPiInstallation> {
+	const launcher = await resolveExecutable(command);
 	const binarySha256 = createHash("sha256").update(await readFile(launcher)).digest("hex");
 	if (profile.runtime?.expectedSha256 && profile.runtime.expectedSha256 !== binarySha256) {
 		throw new Error("Pi launcher digest differs from the route profile");
@@ -1059,7 +1059,7 @@ export class PiAdapter implements HarnessAdapter {
 	async doctor(): Promise<HarnessCapabilities> {
 		if (this.#profile?.runtime?.mode === "direct") {
 			try {
-				const installation = await discoverDirectInstallation(this.#profile);
+				const installation = await discoverDirectInstallation(this.#profile, this.#launcher);
 				const executionQualified = this.#enableTrustedHostDispatch;
 				return {
 					version: 1,
@@ -1393,7 +1393,7 @@ export class PiAdapter implements HarnessAdapter {
 		const diversion = piCoreDiversion(args);
 		if (!directProfile && diversion) throw new Error(`Pi trusted-host argv would select the unprotected PI_CORE path: ${diversion}`);
 		const before = directProfile
-			? await discoverDirectInstallation(directProfile)
+			? await discoverDirectInstallation(directProfile, this.#launcher)
 			: await discoverInstallation(this.#launcher);
 		const route: ConfiguredRoute | undefined = before.identity.provider && before.identity.model && before.identity.reasoning
 			? { provider: before.identity.provider, model: before.identity.model, reasoning: before.identity.reasoning }
@@ -1483,7 +1483,7 @@ export class PiAdapter implements HarnessAdapter {
 		let postRunRoute = route;
 		if (!context.signal.aborted) try {
 			const after = directProfile
-				? await discoverDirectInstallation(directProfile)
+				? await discoverDirectInstallation(directProfile, this.#launcher)
 				: await discoverInstallation(this.#launcher);
 			postRunRoute = after.identity.provider && after.identity.model && after.identity.reasoning
 				? { provider: after.identity.provider, model: after.identity.model, reasoning: after.identity.reasoning }

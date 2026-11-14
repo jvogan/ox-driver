@@ -16,9 +16,9 @@ function fail(message) {
 
 function command(args) {
 	const action = args[0];
-	if (action === "run") {
+	if (action === "run" || action === "validate") {
 		const plan = args[1]?.trim() || fail("ox_team.mjs run requires a plan file");
-		return [HERD, "--lane-spec", resolve(plan), ...args.slice(2)];
+		return [HERD, "--lane-spec", resolve(plan), ...(action === "validate" ? ["--dry-run"] : []), ...args.slice(2)];
 	}
 	if (action === "inspect" || action === "report" || action === "list") {
 		return [ORCHESTRATION, action, ...args.slice(1)];
@@ -28,10 +28,14 @@ function command(args) {
 		return [ORCHESTRATION, "retry", id, ...args.slice(2)];
 	}
 	if (action === "propose" || action === "apply") return [INTEGRATE, action, ...args.slice(1)];
-	fail("usage: ox_team.mjs run PLAN.json | inspect ID | report ID | retry ID [options] | propose ID | apply ID [options] | list");
+	fail("usage: ox_team.mjs run PLAN.json [--dry-run] | validate PLAN.json | inspect ID | report ID [--resolved] | retry ID [options] | propose ID | apply ID [options] | list");
 }
 
 async function main() {
+	if (["--help", "-h", "help"].includes(process.argv[2])) {
+		process.stdout.write("usage: ox_team.mjs run PLAN.json [--dry-run] | validate PLAN.json | inspect ID | report ID [--resolved] | retry ID [options] | propose ID | apply ID [options] | list\n");
+		return;
+	}
 	const [script, ...args] = command(process.argv.slice(2));
 	if (!isAbsolute(script)) fail("resolved Ox team command must be absolute");
 	const exitCode = await new Promise((resolveExit, rejectExit) => {
