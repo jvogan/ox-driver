@@ -4,6 +4,11 @@
 
 ### Added
 
+- Save repository presets with `init`, preview and run them with `work`, read
+  saved results with `result`, and export verified builder patches with `patch`.
+- Configure and inspect routes through `ox-driver route`.
+- Include a dependency-free first-task example with a failing acceptance test.
+- Document current harness package names and qualified release boundaries.
 - List configured routes and launcher pins without executing launchers.
 - Validate team plans without allocating workers or making model requests.
 - Combine latest lane results, attempt history, and cumulative cost evidence
@@ -13,6 +18,10 @@
 
 ### Fixed
 
+- Reject unsupported OpenCode major versions before optional discovery probes.
+- Block an absent selected OpenCode model when a valid catalog is available.
+- Resolve acceptance tools through the controller's Node installation before
+  inherited version-manager shims while retaining isolated check homes.
 - Enforce OpenCode launcher version and digest pins.
 - Inspect each harness independently of unrelated route configuration.
 - Replace route profiles atomically and preserve symlink targets.

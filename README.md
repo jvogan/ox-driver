@@ -8,6 +8,63 @@ Run one worker, start independent workers together, or order tasks with
 dependencies. Each harness uses its own installation and authentication.
 Ox Driver preserves the provider, model, and reasoning effort you select.
 
+## Run your first task
+
+Build Ox Driver and link its command from this checkout. Node.js 22.20 or later,
+npm, Git, and an authenticated OpenCode V1 installation are required.
+
+```bash
+npm ci --ignore-scripts
+npm run build
+npm link --ignore-scripts --workspace @ox-driver/cli
+```
+
+Keep this checkout available while using the linked command. Select a provider,
+model, and reasoning effort supported by your installed launcher:
+
+```bash
+ox-driver route init-opencode \
+  --launcher opencode --provider PROVIDER --model MODEL --reasoning EFFORT
+ox-driver route check --id opencode-default
+```
+
+In the Git repository you want to change, save the route, owned paths, and
+acceptance command once. Replace the example check with your project's command:
+
+```bash
+ox-driver init --route opencode-default --owned src --owned tests \
+  --check "npm ci --ignore-scripts && npm test"
+ox-driver work "Fix the parser's handling of empty input" --dry-run
+ox-driver work "Fix the parser's handling of empty input"
+```
+
+`init` creates `ox-driver.json` without overwriting an existing file. The preset
+contains route IDs, scope, and checks; authentication stays in the harness.
+`--dry-run` checks the selected routes without creating a worktree or making a
+model request. Workers start from committed `HEAD`; commit any source changes
+they need first. The preset is loaded separately, so you can use it before
+committing it.
+
+The result prints the worker's answer, changed files, check results, cost
+evidence, worktree, and receipt. Use its orchestration ID to inspect the saved
+result or export the builder's verified patch:
+
+```bash
+ox-driver result ORCHESTRATION_ID
+ox-driver patch ORCHESTRATION_ID --out change.patch
+git apply --check change.patch
+git apply change.patch
+```
+
+Inspect the diff before applying it. For a dependency-free practice repository,
+follow [the first-task example](examples/first-task/README.md).
+
+To add review, include `--reviewer pi --reviewer-route pi-default` when creating
+the preset. Ox Driver checks both routes before dispatch, then asks the reviewer
+to inspect the writer's exact result. Reviewer findings are advisory; successful
+execution does not imply approval. See [checked handoffs](#run-a-checked-handoff)
+for OMP review and checkpoint resume.
+
 ```mermaid
 flowchart LR
     accTitle: Ox Driver agent workflow
@@ -36,9 +93,10 @@ and runs your checks. You can prepare selected patches in a separate
 integration worktree. Each receipt records the worker's answer, route, usage,
 changed files, and check results. You decide which changes enter your repository.
 
-Each OpenCode writer runs in a managed Git worktree that Ox Driver creates from
-`HEAD`. Pi and OMP run in the directory you name. Before running a Pi writer,
-create a disposable worktree and pass its path to Ox Driver.
+`work`, `task`, and `handoff` create a managed worktree from `HEAD` for the
+OpenCode writer. Pair and team lanes use the worktrees you supply. Pi and OMP
+run in the directory you name. Before running a Pi writer, create a disposable
+worktree and pass its path to Ox Driver.
 
 ## Harnesses
 
@@ -46,7 +104,8 @@ Install each selected harness separately and configure its authentication
 outside Ox Driver.
 
 - [OpenCode](https://opencode.ai) is a terminal coding agent. Ox Driver reads
-  its JSON event stream. See [OpenCode routes and work](skills/ox-driver/references/opencode.md).
+  its V1 JSON event stream and blocks major versions 2 and later. See
+  [OpenCode routes and work](skills/ox-driver/references/opencode.md).
 - [Pi](https://pi.dev) is a terminal coding agent. Its direct routes accept
   optional launcher version and digest pins. See [Pi routes and work](skills/ox-driver/references/pi.md).
 - [OMP](https://omp.sh) is a coding agent with an RPC interface. Ox Driver's
@@ -73,6 +132,12 @@ pass its absolute path to `init-opencode`, `init-pi`, or `init-omp` with
 `doctor`, validation, preflight, and tests make no model request. ACP and
 DeepSeek Harness never receive a task prompt through Ox Driver.
 
+Read [harness compatibility](skills/ox-driver/references/harness-compatibility.md)
+for the current OpenCode package split, Pi package namespace, and qualified
+OMP release. A launcher pin checks identity; it does not qualify a new protocol.
+OpenCode doctor also checks the selected model when the launcher's model catalog
+is available. A missing model blocks dispatch without selecting a replacement.
+
 ## What a receipt records
 
 Ox Driver writes one JSON receipt per run under its state root, outside the
@@ -88,11 +153,11 @@ reference, and notices.
   "runId": "example-run-0001",
   "adapterId": "opencode-v2",
   "harness": "opencode",
-  "harnessVersion": "1.18.23",
+  "harnessVersion": "1.19.5",
   "status": "completed",
   "requestedRouteProfile": "opencode-default",
   "routeProfileSha256": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
-  "configuredRoute": { "provider": "openrouter", "model": "z-ai/glm-5.3-flash", "reasoning": "max" },
+  "configuredRoute": { "provider": "example-provider", "model": "example-model", "reasoning": "high" },
   "costReport": { "mode": "report-only", "ceilingUsdMicros": 50000, "observedUsdMicros": 4180, "status": "within-ceiling" },
   "usage": { "providerRequests": 7, "toolCalls": 8, "childrenStarted": 0, "reportedCostUsdMicros": 4180, "complete": true, "sources": ["harness"] },
   "initialWorkspaceSha256": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
@@ -163,8 +228,9 @@ available while using the skill.
 
 The build produces two entry points:
 
-- `packages/cli/dist/main.js` is the controller: `doctor`, `validate`,
-  `preflight`, `run`, `omp-review`, `handoff`, `inspect`, `cancel`, `recover`.
+- `packages/cli/dist/main.js` is the controller: `init`, `work`, `result`,
+  `patch`, `route`, `doctor`, `validate`, `preflight`, `run`, `omp-review`,
+  `handoff`, `inspect`, `cancel`, `recover`.
 - `packages/opencode-cli/dist/main.js` is the OpenCode writer: `task`,
   `doctor`, `inspect`, `tail`, `cancel`, `recover`.
 
@@ -183,14 +249,13 @@ Set the provider, model, and reasoning effort that your installed launcher
 accepts:
 
 ```bash
-provider_id="openrouter"
-model_id="z-ai/glm-5.3-flash"
-effort="max"
+provider_id="PROVIDER"
+model_id="MODEL"
+effort="EFFORT"
 ```
 
 Ox Driver records these strings in the route profile and passes them to the
-launcher unchanged. The example requires a launcher that accepts `max` as its
-reasoning effort.
+launcher unchanged. Replace the placeholders with your selected route.
 
 Create an OpenCode route:
 

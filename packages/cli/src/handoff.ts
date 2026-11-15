@@ -101,6 +101,10 @@ function parseHandoff(args: string[]): HandoffOptions {
 	const positional: string[] = [];
 	for (let index = 0; index < args.length; index += 1) {
 		const argument = args[index];
+		if (argument === "--") {
+			positional.push(...args.slice(index + 1));
+			break;
+		}
 		if (argument === "--ref") ref = args[++index]?.trim() || fail("--ref requires a Git revision");
 		else if (argument === "--owned") ownedPaths.push(relativeScope(args[++index], "--owned"));
 		else if (argument === "--exclude") excludedPaths.push(relativeScope(args[++index], "--exclude"));
@@ -162,8 +166,6 @@ function parseHandoff(args: string[]): HandoffOptions {
 
 function normalizedHandoffArgs(options: HandoffOptions, routeProfile: string): string[] {
 	return [
-		options.source,
-		options.objective,
 		"--ref", options.ref,
 		...options.ownedPaths.flatMap((path) => ["--owned", path]),
 		...options.excludedPaths.filter((path) => path !== ".env").flatMap((path) => ["--exclude", path]),
@@ -177,6 +179,7 @@ function normalizedHandoffArgs(options: HandoffOptions, routeProfile: string): s
 		"--builder-cost-ceiling", String(options.builderCostUsdMicros / 1_000_000),
 		"--reviewer-cost-ceiling", String(options.reviewerCostUsdMicros / 1_000_000),
 		"--reviewer", options.reviewer,
+		"--", options.source, options.objective,
 	];
 }
 
@@ -412,6 +415,22 @@ function allAcceptancePassed(receipt: RunReceipt, expected: number): boolean {
 
 function describePreflightIssues(issues: PreflightResult["issues"]): string {
 	return issues.map((issue) => `${issue.code}: ${issue.message}`).join("\n");
+}
+
+export async function preflightHandoff(args: string[], runtime: HandoffRuntime): Promise<{
+	builder: { spec: RunSpec; preflight: PreflightResult };
+	reviewer: { spec: RunSpec; preflight: PreflightResult };
+}> {
+	const options = parseHandoff(args);
+	const profile = await runtime.resolveBuilderProfile(options.builderRoute);
+	const build = builderSpec(options, options.source, profile.id, profile.configuredRoute);
+	const review = reviewerSpec(options, options.source, options.objective);
+	const builderController = await runtime.createController(build);
+	const reviewerController = await runtime.createController(review);
+	return {
+		builder: { spec: build, preflight: await builderController.preflight(build) },
+		reviewer: { spec: review, preflight: await reviewerController.preflight(review) },
+	};
 }
 
 export async function runHandoff(args: string[], runtime: HandoffRuntime): Promise<{ exitCode: number; receipt: Record<string, unknown> }> {

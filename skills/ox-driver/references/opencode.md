@@ -8,6 +8,11 @@ OpenCode provides trusted-host one-writer tasks, receipt-aware direct children,
 pairs, and team lanes. Managed worktrees separate Git changes and remain
 available for inspection.
 
+Ox Driver supports the V1 JSON event protocol and blocks recognized OpenCode
+major versions 2 and later. Read [harness compatibility](harness-compatibility.md)
+before changing package release lines. The adapter ID `opencode-v2` names the
+Ox Driver contract, not OpenCode 2 support.
+
 ## Create a route
 
 Build Ox Driver, then create an explicit route profile:
@@ -24,8 +29,10 @@ npm exec -- ox-driver-opencode doctor
 ```
 
 Use provider, model, and reasoning values supported by the installed launcher.
-The initializer validates profile shape. The first paid task verifies that the
-launcher can reach the selected route.
+The initializer validates profile shape. Doctor queries the model catalog
+without making a model request. A valid catalog that omits the selected model
+blocks dispatch; an unavailable catalog reports that availability is unverified.
+The first task verifies that the launcher can reach the selected route.
 
 Add `--expected-version` or `--expected-sha256` to pin the launcher. Doctor
 checks the digest before executing the launcher and verifies the version text.
@@ -34,6 +41,16 @@ Dispatch verifies the launcher identity before and after execution.
 Use `--agent PROFILE` to set a default OpenCode agent. Use `--id PROFILE_ID`
 and `--route PROFILE_ID` when keeping several reviewed routes. Keep a route
 profile unchanged while active or retryable runs reference its digest.
+
+When a selected model disappears, list the installed launcher's catalog:
+
+```bash
+opencode models PROVIDER
+```
+
+Use the selected route's launcher command if it differs from `opencode`.
+Choose a replacement explicitly and create a new route ID with `--id`.
+Ox Driver does not substitute a model or change an active receipt's route.
 
 ## Run one writer
 

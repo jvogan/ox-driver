@@ -26,9 +26,35 @@ const OUTPUT_LIMIT = 16 * 1024 * 1024;
 const PROBE_OUTPUT_LIMIT = 1024 * 1024;
 const PROBE_TIMEOUT_MILLISECONDS = 10_000;
 const SESSION_ID = /^ses_[A-Za-z0-9]+$/;
+const MODEL_UNAVAILABLE_NOTICE = "OpenCode model unavailable:";
 const execFileAsync = promisify(execFile);
 
 type JsonObject = Record<string, unknown>;
+
+interface OpenCodeLauncherInspection {
+	executable: string;
+	binarySha256: string;
+	harnessVersion: string;
+}
+
+class UnsupportedOpenCodeVersionError extends Error {
+	constructor(readonly installation: OpenCodeLauncherInspection) {
+		super("OpenCode major version 2 or later is not qualified for this adapter's V1 JSON event and DB receipt contracts. The opencode-v2 adapter ID identifies the adapter contract version, not OpenCode 2 compatibility. Keep the selected route unchanged and use a separately qualified launcher.");
+	}
+}
+
+class UnavailableOpenCodeModelError extends Error {
+	constructor(readonly installation: OpenCodeLauncherInspection, provider: string, model: string) {
+		super(`${MODEL_UNAVAILABLE_NOTICE} ${provider}/${model} is absent from the launcher's successful models ${provider} catalog. The selected route is unchanged; select an available model explicitly before dispatch.`);
+	}
+}
+
+function rejectUnsupportedHarnessVersion(installation: OpenCodeLauncherInspection): void {
+	for (const line of installation.harnessVersion.split(/\r?\n/)) {
+		const match = line.trim().match(/^(?:opencode(?:-ai)?(?: version)?[\t /:=_-]+)?v?([0-9]+)\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?(?:[\t ].*)?$/i);
+		if (match && Number(match[1]) >= 2) throw new UnsupportedOpenCodeVersionError(installation);
+	}
+}
 
 export interface OpenCodeAdapterOptions {
 	profile: ResolvedRouteProfile;
@@ -119,7 +145,7 @@ async function verifyDigest(executable: string, expectedSha256?: string): Promis
 	return digest;
 }
 
-async function inspectLauncher(command: string, profile: ResolvedRouteProfile, qualifiedDigest?: string): Promise<{ executable: string; binarySha256: string; harnessVersion: string }> {
+async function inspectLauncher(command: string, profile: ResolvedRouteProfile, qualifiedDigest?: string): Promise<OpenCodeLauncherInspection> {
 	const executable = await resolveExecutable(command);
 	const binarySha256 = await verifyDigest(executable, profile.runtime?.expectedSha256);
 	if (qualifiedDigest && binarySha256 !== qualifiedDigest) throw new Error("OpenCode launcher evidence changed after preflight");
@@ -133,7 +159,31 @@ async function inspectLauncher(command: string, profile: ResolvedRouteProfile, q
 		throw new Error(`OpenCode version output did not contain ${profile.runtime.expectedVersion}`);
 	}
 	await verifyDigest(executable, binarySha256);
-	return { executable, binarySha256, harnessVersion };
+	const installation = { executable, binarySha256, harnessVersion };
+	rejectUnsupportedHarnessVersion(installation);
+	return installation;
+}
+
+async function probeModelAvailability(installation: OpenCodeLauncherInspection, provider: string, model: string): Promise<"listed" | "missing" | "unknown"> {
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(provider)) return "unknown";
+	await verifyDigest(installation.executable, installation.binarySha256);
+	let output: string | undefined;
+	try {
+		const result = await execFileAsync(installation.executable, ["models", provider], {
+			timeout: PROBE_TIMEOUT_MILLISECONDS,
+			maxBuffer: PROBE_OUTPUT_LIMIT,
+		});
+		output = result.stdout.trim();
+	} catch {
+		// Older launchers and synthetic fixtures may lack catalog discovery.
+		// Failure does not prove that the selected model is unavailable.
+	}
+	await verifyDigest(installation.executable, installation.binarySha256);
+	if (!output) return "unknown";
+	const entries = output.split(/\r?\n/);
+	if (entries.some((entry) => !/^[A-Za-z0-9][A-Za-z0-9._-]*\/[^\s\x00-\x1f\x7f]+$/.test(entry)
+		|| !entry.startsWith(`${provider}/`)) || new Set(entries).size !== entries.length) return "unknown";
+	return entries.includes(`${provider}/${model}`) ? "listed" : "missing";
 }
 
 function appendBounded(current: Buffer, chunk: Buffer): { bytes: Buffer; truncated: boolean } {
@@ -369,6 +419,7 @@ async function runTrustedProcess(
 }
 
 export class OpenCodeAdapter implements HarnessAdapter {
+	// This versions the Ox adapter contract, not the OpenCode harness release.
 	readonly id = "opencode-v2";
 	readonly harness = "opencode";
 	readonly #profile: ResolvedRouteProfile;
@@ -383,7 +434,14 @@ export class OpenCodeAdapter implements HarnessAdapter {
 
 	async doctor(): Promise<HarnessCapabilities> {
 		try {
-			const { executable, binarySha256, harnessVersion } = await inspectLauncher(this.#launcher, this.#profile);
+			const installation = await inspectLauncher(this.#launcher, this.#profile);
+			const { executable, binarySha256, harnessVersion } = installation;
+			const modelAvailability = this.#profile.route.source === "explicit"
+				? await probeModelAvailability(installation, this.#profile.route.provider, this.#profile.route.model)
+				: "unknown";
+			if (modelAvailability === "missing" && this.#profile.route.source === "explicit") {
+				throw new UnavailableOpenCodeModelError(installation, this.#profile.route.provider, this.#profile.route.model);
+			}
 			let doctor;
 			if (this.#profile.launcher.doctor) {
 				await verifyDigest(executable, binarySha256);
@@ -465,6 +523,9 @@ export class OpenCodeAdapter implements HarnessAdapter {
 				},
 					notices: [
 					this.#profile.notice ?? "OpenCode uses its selected trusted-host route profile.",
+					modelAvailability === "listed"
+						? "OpenCode model availability is verified by the launcher's zero-model catalog listing; provider access and generation remain untested."
+						: "OpenCode model availability is unverified because a well-formed nonempty provider catalog was unavailable; the selected route is unchanged.",
 					...(executionQualified ? [] : ["Launcher-derived routes require structured configured-route evidence before dispatch."]),
 					"Trusted-host OpenCode uses shared harness configuration, normal built-in tools, automatic permission handling, and report-only cost telemetry.",
 					...(delegationQualified
@@ -473,12 +534,21 @@ export class OpenCodeAdapter implements HarnessAdapter {
 				],
 			};
 		} catch (error) {
+			const unsupported = error instanceof UnsupportedOpenCodeVersionError || error instanceof UnavailableOpenCodeModelError ? error.installation : undefined;
 			return {
 				version: 1,
 				adapterId: this.id,
 				harness: this.harness,
 				compatibility: "blocked",
 				available: false,
+				...(unsupported ? {
+					...unsupported,
+					routeProfileSha256: this.#profile.sha256,
+					...(this.#profile.route.source === "explicit" ? { configuredRoute: {
+						provider: this.#profile.route.provider, model: this.#profile.route.model, reasoning: this.#profile.route.reasoning,
+					} } : {}),
+					probe: { version: 1 as const, modelCalls: 0 as const, contract: "opencode-trusted-host-profile-v1", artifact: "unverified" as const, executionQualified: false },
+				} : {}),
 				capabilities: {},
 				notices: [error instanceof Error ? error.message : String(error), "OpenCode trusted-host doctor made zero model calls."],
 			};
@@ -487,6 +557,8 @@ export class OpenCodeAdapter implements HarnessAdapter {
 
 	async preflight(spec: RunSpec, doctor: HarnessCapabilities): Promise<PreflightIssue[]> {
 		const issues: PreflightIssue[] = [];
+		const unavailableModel = doctor.notices.find((notice) => notice.startsWith(MODEL_UNAVAILABLE_NOTICE));
+		if (unavailableModel) issues.push({ severity: "error", code: "OPENCODE_MODEL_UNAVAILABLE", message: unavailableModel });
 		if (spec.tier !== "trusted-host") issues.push({ severity: "error", code: "OPENCODE_TRUSTED_HOST_REQUIRED", message: "OpenCode profile dispatch requires trusted-host tier" });
 		if (spec.routeProfile !== this.#profile.id) issues.push({ severity: "error", code: "OPENCODE_ROUTE_REQUIRED", message: `OpenCode requires route profile ${this.#profile.id}` });
 		if (this.#profile.route.source !== "explicit" || doctor.probe?.executionQualified !== true || !doctor.configuredRoute) {
@@ -569,6 +641,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
 	}
 
 	async run(spec: RunSpec, context: AdapterRunContext): Promise<AdapterRunResult> {
+		if (!context.doctor.available) throw new Error(context.doctor.notices[0] ?? "OpenCode requires an available execution-qualified launcher before dispatch");
 		if (spec.tier !== "trusted-host" || spec.routeProfile !== this.#profile.id || this.#profile.route.source !== "explicit") {
 			throw new Error("OpenCode run is outside its resolved trusted-host route profile");
 		}

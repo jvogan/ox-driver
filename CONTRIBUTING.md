@@ -35,6 +35,7 @@ executes it. Extend the matching test:
 | `scripts/ox_integrate.mjs` | `tests/controller/ox-integrate-script.test.mjs` |
 | `packages/opencode-cli` | `tests/controller/opencode-public-cli.test.mjs` |
 | `packages/cli` runtime | `tests/controller/cli-runtime.test.mjs` |
+| `init`, `work`, `result`, `patch`, `route` | `tests/public/work-cli.test.mjs` |
 
 Add or update a direct CLI parsing test when changing
 `packages/cli/src/main.ts`.

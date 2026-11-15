@@ -69,8 +69,8 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 2786,
-      "sha256": "a19c3d322018ea11f4d593272bbb49c8d86ba4db95547e419617575eea88d8d4"
+      "bytes": 3462,
+      "sha256": "3d7722dde38c004fff6529b13382d57ef0c9299c0d9ad3fbdcb53f29266e0ed4"
     },
     {
       "path": "CLAUDE.md",
@@ -79,8 +79,8 @@
     },
     {
       "path": "CONTRIBUTING.md",
-      "bytes": 3620,
-      "sha256": "90163beaf9d03e287ed59ff548b56e5d289a115b62be09ec9a47edebcd3b5b7d"
+      "bytes": 3702,
+      "sha256": "08fb637f223e497d5e8db500feffe956996cae8974028dbec0db84c74ea52305"
     },
     {
       "path": "LICENSE",
@@ -94,8 +94,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 21190,
-      "sha256": "7281ace4ff4c00e4ce44ca629ad0193a2acb73ae96b3455ad34fb2c93e3fa857"
+      "bytes": 23969,
+      "sha256": "36041d586c16884d2693733bdb6029d26436ef607e5b5cd3de3ea9eab72861eb"
     },
     {
       "path": "SECURITY.md",
@@ -103,9 +103,24 @@
       "sha256": "b9891eda0c44719a64a6e9b1bea6329b8a6978d89bf3ad868ba3c90cd82360cf"
     },
     {
+      "path": "examples/first-task/README.md",
+      "bytes": 1370,
+      "sha256": "b9a01e59ad66f12e5c840f6d3335edf9a4e85a432593aafae0406d216a2ef3a8"
+    },
+    {
+      "path": "examples/first-task/src/clamp.mjs",
+      "bytes": 85,
+      "sha256": "61b8a397502057cceec511be53e5841535830d45961b305c81da94e94f1e81b0"
+    },
+    {
+      "path": "examples/first-task/test/clamp.test.mjs",
+      "bytes": 291,
+      "sha256": "9bc15a84079391b232d3ebb0f3706934f46d9d21d7aa85856470c9b02d3576cf"
+    },
+    {
       "path": "package-lock.json",
-      "bytes": 19250,
-      "sha256": "34f5b42f37a8cc543c2443068977de139850f0540279f1fb46cba68de3eea3b3"
+      "bytes": 19300,
+      "sha256": "5cc35bd4bd929b0e4954a399721647965ea0e5ce96152ad1de0563582ec0fa46"
     },
     {
       "path": "package.json",
@@ -194,8 +209,8 @@
     },
     {
       "path": "packages/adapters/opencode/src/index.ts",
-      "bytes": 33083,
-      "sha256": "8b1edcaa2c539a1c47cc7481f4fcc31b47fc70a77ba047c9ec07b8ef208ebba7"
+      "bytes": 37488,
+      "sha256": "e794656650cad79e463f1591bea9852f1d3110ff194e314c34c315ab0086235c"
     },
     {
       "path": "packages/adapters/opencode/src/session-db.ts",
@@ -269,18 +284,18 @@
     },
     {
       "path": "packages/cli/package.json",
-      "bytes": 437,
-      "sha256": "e0598969f5565f3e8b93081aa4cf6cdd10109b44806d19823202219fb9d7ffb5"
+      "bytes": 483,
+      "sha256": "58347f2abd722e9d42e941eb73efded00872b9d3f251b0a245c2ff10be4b4b48"
     },
     {
       "path": "packages/cli/src/handoff.ts",
-      "bytes": 42257,
-      "sha256": "20c13ac88be125cee07c290d8bd7f3266f72d396ef9bede0f94ddd43582c263e"
+      "bytes": 43153,
+      "sha256": "d1353e36ef0d370069454b2452321780d06381bfb3b1d7241dd402b71086db67"
     },
     {
       "path": "packages/cli/src/main.ts",
-      "bytes": 7167,
-      "sha256": "263986f7f0b9b17b4188cb49a2a80cf8ab5e6f1b22ff72f47fca0deb0f73f663"
+      "bytes": 7386,
+      "sha256": "ac54e39d4d91df13aed5e58ebf85148770c3643acd5a55243342b8623683aedb"
     },
     {
       "path": "packages/cli/src/omp-review.ts",
@@ -288,14 +303,34 @@
       "sha256": "38c9d027292a8638a2d16200ebbe60e918d907f73f6f6143a03cd8ddb311b637"
     },
     {
+      "path": "packages/cli/src/project-config.ts",
+      "bytes": 15086,
+      "sha256": "7c5eb3c80fa6a4db9a963eb2d0eaf2b491c89cbf73bcc03cf236496acd28ef6f"
+    },
+    {
       "path": "packages/cli/src/runtime.ts",
       "bytes": 10791,
       "sha256": "91fba4f54250463084fe14267f235ff034758e0f93f919244d831f923eddfb4d"
     },
     {
+      "path": "packages/cli/src/work-cli.ts",
+      "bytes": 8229,
+      "sha256": "f200bc7fefbc953958513f32042481c98f9e767df4c5eba36c404e7e36116cfb"
+    },
+    {
+      "path": "packages/cli/src/work-result.ts",
+      "bytes": 9934,
+      "sha256": "9dec5efcbc1c35a08fb510c3fa9820c5c1561210640b11e5bc5af4d225eb46fa"
+    },
+    {
+      "path": "packages/cli/src/work.ts",
+      "bytes": 9307,
+      "sha256": "40fe0f19bfc5698e766e24167a3432a83493ae90b78f069bace76fb81178576e"
+    },
+    {
       "path": "packages/cli/tsconfig.json",
-      "bytes": 417,
-      "sha256": "278f73de391c33670e4bb7cc8eceeba5aa63a10b47ab5093713e0084b7e4ca67"
+      "bytes": 452,
+      "sha256": "cc65beca679a4cd1cace4ee5c9b82089cca0d0e7cdc643b4a6ed2e4195f6d33f"
     },
     {
       "path": "packages/core/package.json",
@@ -309,8 +344,8 @@
     },
     {
       "path": "packages/core/src/controller.ts",
-      "bytes": 67322,
-      "sha256": "826b3848570d9e02c3721402136f95b71ee3dea9d76311757e96d52377587425"
+      "bytes": 67511,
+      "sha256": "ee9333e79e3e6662cee53344478840d3b7fb8ed83040a400a320c47314f7ed45"
     },
     {
       "path": "packages/core/src/evidence.ts",
@@ -434,8 +469,8 @@
     },
     {
       "path": "packages/opencode-cli/src/task.ts",
-      "bytes": 11130,
-      "sha256": "ace5531d5b375313cba96f5bd4182c61723678470e1c3ccaed45beb5c3b4dccd"
+      "bytes": 11957,
+      "sha256": "7d7079907ec003d38fcb0ee777f9db9d9f7bfb6f9478c29f5a2d29574ac3829a"
     },
     {
       "path": "packages/opencode-cli/tsconfig.json",
@@ -544,13 +579,18 @@
     },
     {
       "path": "skills/ox-driver/SKILL.md",
-      "bytes": 17453,
-      "sha256": "98b2d14535d920e8631e61d9893df82246440ede9f2aabbd0851b15f1c09a085"
+      "bytes": 18729,
+      "sha256": "a107548802894c65230110381658113d8a04fd5a85022b226e6dcfc2ab59bae5"
     },
     {
       "path": "skills/ox-driver/THIRD_PARTY_NOTICES.md",
       "bytes": 299,
       "sha256": "095792ed39e85414916ec1184330d77a5889d7a2edf5897d675c7908963e4bad"
+    },
+    {
+      "path": "skills/ox-driver/references/harness-compatibility.md",
+      "bytes": 4117,
+      "sha256": "9fabcf368931e461f0093e6111e94a261bc1885d3e4dc7f92305a44ad641a1a9"
     },
     {
       "path": "skills/ox-driver/references/omp.md",
@@ -559,13 +599,13 @@
     },
     {
       "path": "skills/ox-driver/references/opencode.md",
-      "bytes": 5184,
-      "sha256": "4f8de910af46870b749899d6198773f78ddd83f395018c1a7a59bb1783d038d7"
+      "bytes": 5986,
+      "sha256": "53c33079beab82e826a07d2932eef0d8c8b04baa216d5559d557276b76f5b64b"
     },
     {
       "path": "skills/ox-driver/references/pi.md",
-      "bytes": 4414,
-      "sha256": "e1bf479abc97af2d79358ddcf233d5b074747d45c5d01b178c653525cbcb28ec"
+      "bytes": 4614,
+      "sha256": "7da6a6871b3418a733aa413fd91a9eceeb0ac79e8e9dedbebbdaa54c0f45ebdc"
     },
     {
       "path": "skills/ox-driver/references/receipts-and-handoffs.md",
@@ -594,8 +634,8 @@
     },
     {
       "path": "tests/controller/opencode-profile-adapter.test.mjs",
-      "bytes": 22765,
-      "sha256": "46f5f86824cae1f31ed648445060ea4a09e347f4233b3c723eeca470765a583c"
+      "bytes": 28576,
+      "sha256": "726f9abf8343e8756195536c8d14800cd25861712bbb5a5b44a8fceb1c7ec757"
     },
     {
       "path": "tests/controller/opencode-public-cli.test.mjs",
@@ -688,6 +728,11 @@
       "sha256": "4d4bd1b8089f8d0b03c2ac37e7a1fa96207decaa89d0a07a2f954b967bc65d55"
     },
     {
+      "path": "tests/public/acceptance-runtime.test.mjs",
+      "bytes": 4644,
+      "sha256": "661548dde30febb97060466f3fa90aa412d2891259e000741d0c88266b11b3b4"
+    },
+    {
       "path": "tests/public/integration-store.test.mjs",
       "bytes": 3499,
       "sha256": "be291b92214af8ecb3876337994e4334e13fce603653b6ac65ccb5495a04c022"
@@ -703,9 +748,29 @@
       "sha256": "a336cf5700e0dfddd9c0a3b019222d551176f3efd52f5493b72831c302938e59"
     },
     {
+      "path": "tests/public/project-config.test.mjs",
+      "bytes": 9458,
+      "sha256": "849048220d4254f848cab497f1456462b35acdfac081b0b352fa225b522ee6bb"
+    },
+    {
       "path": "tests/public/release-capabilities.test.mjs",
       "bytes": 5147,
       "sha256": "d01f251cdc399ee7b096942a3a7b413edbd9bd55a3545871b8350881e716de34"
+    },
+    {
+      "path": "tests/public/work-cli.test.mjs",
+      "bytes": 6998,
+      "sha256": "7225942fc0da18f23c1a28f51109e25dcbef63118171c4daed7bc637b29ff54a"
+    },
+    {
+      "path": "tests/public/work-result.test.mjs",
+      "bytes": 7845,
+      "sha256": "e17c7bdac09a70f3a031cb0745f94020fa5b3e08c031c5a4dc48857f2dc69e14"
+    },
+    {
+      "path": "tests/public/work-workflow.test.mjs",
+      "bytes": 17978,
+      "sha256": "e70706d8230340574c6970b375cf5f11148cef485f24e6bf1aaa220aa3c5b62e"
     },
     {
       "path": "tsconfig.base.json",

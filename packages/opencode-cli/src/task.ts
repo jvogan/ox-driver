@@ -9,11 +9,12 @@ import {
 	OrchestrationReceiptStore,
 	validateEffectiveRetryPlan,
 	type OxController,
+	type PreflightResult,
 	type ResolvedRouteProfile,
 	type RunSpec,
 } from "@ox-driver/core";
 
-interface TaskRuntime {
+export interface TaskRuntime {
 	resolveProfile(requested: string | undefined, profileDirectory: string | undefined): Promise<ResolvedRouteProfile>;
 	createController(spec: RunSpec, profileDirectory: string | undefined): Promise<OxController>;
 }
@@ -60,6 +61,10 @@ function parseTask(args: string[]): TaskOptions {
 	const positional: string[] = [];
 	for (let index = 0; index < args.length; index += 1) {
 		const argument = args[index];
+		if (argument === "--") {
+			positional.push(...args.slice(index + 1));
+			break;
+		}
 		if (argument === "--ref") ref = args[++index]?.trim() || fail("--ref requires a Git revision");
 		else if (argument === "--owned") ownedPaths.push(relativeScope(args[++index], "--owned"));
 		else if (argument === "--exclude") excludedPaths.push(relativeScope(args[++index], "--exclude"));
@@ -111,6 +116,50 @@ function parseTask(args: string[]): TaskOptions {
 	};
 }
 
+function taskSpec(options: TaskOptions, profile: ResolvedRouteProfile, cwd: string): RunSpec {
+	if (profile.route.source !== "explicit") throw new Error(`route profile ${profile.id} does not provide an explicit dispatch route`);
+	const routeProfile = profile.id;
+	const childRoute = { provider: profile.route.provider, model: profile.route.model, reasoning: profile.route.reasoning };
+	return {
+		version: 1,
+		tier: "trusted-host",
+		harness: "opencode",
+		routeProfile,
+		task: {
+			objective: options.objective,
+			cwd,
+			ownedPaths: [...new Set([...options.ownedPaths, ".git/HEAD"])],
+			excludedPaths: options.excludedPaths,
+		},
+		execution: {
+			session: "new",
+			...(options.agent ? { agentProfile: options.agent } : {}),
+			topology: options.childAgents.length > 0 ? "flat" : "solo",
+			writerPolicy: "one-writer",
+			network: "configured",
+			timeoutSeconds: options.timeoutSeconds,
+			reportOnlyCostUsdMicros: options.reportOnlyCostUsdMicros,
+			...(options.childAgents.length > 0 ? {
+				childPolicy: { allowedProfiles: options.childAgents, allowedRoutes: [childRoute] },
+			} : {}),
+		},
+		acceptance: {
+			commands: options.checks,
+			requireCleanUnownedPaths: true,
+			timeoutSeconds: options.timeoutSeconds,
+			continueOnFailure: true,
+		},
+	};
+}
+
+export async function preflightTask(args: string[], runtime: TaskRuntime): Promise<{ spec: RunSpec; preflight: PreflightResult }> {
+	const options = parseTask(args);
+	const profile = await runtime.resolveProfile(options.route, options.profileDirectory);
+	const spec = taskSpec(options, profile, options.source);
+	const controller = await runtime.createController(spec, options.profileDirectory);
+	return { spec, preflight: await controller.preflight(spec) };
+}
+
 function errorEvidence(error: unknown): Record<string, unknown> {
 	return compactOrchestrationError(error);
 }
@@ -146,43 +195,13 @@ export async function runTask(args: string[], runtime: TaskRuntime): Promise<{ e
 		const profile = await runtime.resolveProfile(options.route, options.profileDirectory);
 		const routeProfile = profile.id;
 		if (profile.route.source !== "explicit") throw new Error(`route profile ${profile.id} does not provide an explicit dispatch route`);
-		const childRoute = { provider: profile.route.provider, model: profile.route.model, reasoning: profile.route.reasoning };
 		resolvedRouteProfile = routeProfile;
-		const buildSpec = (cwd: string): RunSpec => ({
-			version: 1,
-			tier: "trusted-host",
-			harness: "opencode",
-			routeProfile,
-			task: {
-				objective: options.objective,
-				cwd,
-				ownedPaths: [...new Set([...options.ownedPaths, ".git/HEAD"])],
-				excludedPaths: options.excludedPaths,
-			},
-			execution: {
-				session: "new",
-				...(options.agent ? { agentProfile: options.agent } : {}),
-				topology: options.childAgents.length > 0 ? "flat" : "solo",
-				writerPolicy: "one-writer",
-				network: "configured",
-				timeoutSeconds: options.timeoutSeconds,
-				reportOnlyCostUsdMicros: options.reportOnlyCostUsdMicros,
-				...(options.childAgents.length > 0 ? {
-					childPolicy: { allowedProfiles: options.childAgents, allowedRoutes: [childRoute] },
-				} : {}),
-			},
-			acceptance: {
-				commands: options.checks,
-				requireCleanUnownedPaths: true,
-				timeoutSeconds: options.timeoutSeconds,
-				continueOnFailure: true,
-			},
-		});
+
 		// Preflight against the source repository before creating a managed
 		// worktree, so a blocked launcher or route leaves nothing to clean up.
 		stage = "route-preflight";
-		controller = await runtime.createController(buildSpec(options.source), options.profileDirectory);
-		const admission = await controller.preflight(buildSpec(options.source));
+		controller = await runtime.createController(taskSpec(options, profile, options.source), options.profileDirectory);
+		const admission = await controller.preflight(taskSpec(options, profile, options.source));
 		if (!admission.ok) {
 			throw new Error(`preflight failed before workspace creation:\n${admission.issues
 				.filter((issue) => issue.severity === "error")
@@ -195,7 +214,7 @@ export async function runTask(args: string[], runtime: TaskRuntime): Promise<{ e
 			status = "cancelled";
 			stage = "cancelled-before-run";
 		} else {
-			const spec: RunSpec = buildSpec(workspace.path);
+			const spec: RunSpec = taskSpec(options, profile, workspace.path);
 			if (interrupted) {
 				status = "cancelled";
 				stage = "cancelled-before-run";

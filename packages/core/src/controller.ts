@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, readFile, readlink, realpath, unlink, writeFile } from "node:fs/promises";
-import { delimiter, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { delimiter, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 
 import { AdapterRegistry } from "./registry.js";
 import { RunBudgetLedger, type ControllerBudgetLedger } from "./budget.js";
@@ -88,6 +88,9 @@ function nonSecretEnvironment(): NodeJS.ProcessEnv {
 function trustedHostToolPath(): string {
 	const directories = [
 		...CONTROLLER_PATH.split(delimiter),
+		// Reuse the running Node installation before inherited version-manager
+		// shims, which may depend on the ambient HOME that checks do not receive.
+		dirname(process.execPath),
 		...(process.env.PATH ?? "").split(delimiter),
 	].filter((entry) => entry && isAbsolute(entry));
 	return [...new Set(directories)].join(delimiter);

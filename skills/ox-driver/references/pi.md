@@ -9,6 +9,10 @@ route profile. Run either mode alone, in a Pi-only team, or in a mixed team.
 Ox Driver preserves the selected provider, model, reasoning effort, launcher,
 and configured network behavior.
 
+The current upstream package is `@earendil-works/pi-coding-agent`. Read
+[harness compatibility](harness-compatibility.md) for package migration and the
+separate guarded-route qualification boundary.
+
 ## Create a route
 
 ```bash

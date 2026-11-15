@@ -12,6 +12,7 @@
     { "path": "../adapters/dsh" },
     { "path": "../adapters/omp" },
     { "path": "../adapters/opencode" },
-    { "path": "../adapters/pi" }
+    { "path": "../adapters/pi" },
+    { "path": "../opencode-cli" }
   ]
 }

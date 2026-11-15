@@ -15,7 +15,8 @@ Use Ox Driver to assign repository research, implementation, and review to
 OpenCode, Pi, or OMP from a main coding agent or terminal. Ox returns each
 worker's answer, code changes, and run record.
 
-Work from the Ox Driver source directory. Preserve the user's selected harness,
+Run source scripts from the Ox Driver source directory; run the linked
+`ox-driver work` command from the target repository. Preserve the user's selected harness,
 launcher, provider, model, reasoning effort, agent profile, repository scope,
 checks, timeout, and reported-cost target. A retry reuses the recorded route
 profile and fails preflight with `ROUTE_PROFILE_DRIFT` when the prior receipt
@@ -50,6 +51,27 @@ dispatchable harnesses.
 Ox-managed Pi child-profile selection is unavailable. OMP writing and OMP
 child agents are unavailable. ACP and DeepSeek Harness task dispatch is
 unavailable.
+
+## Reuse a repository preset
+
+After building and linking the CLI, run these commands from the target Git
+repository. Use an existing OpenCode route and the project's acceptance command:
+
+```bash
+ox-driver init --route opencode-default --owned src --owned tests \
+  --check "npm ci --ignore-scripts && npm test"
+ox-driver work "Implement one focused change" --dry-run
+ox-driver work "Implement one focused change"
+ox-driver result ORCHESTRATION_ID
+ox-driver patch ORCHESTRATION_ID --out change.patch
+```
+
+`init` creates `ox-driver.json` without overwriting a file. The preset stores
+route IDs, scope, and checks, with optional Pi or OMP review. Workers start
+from committed `HEAD`; uncommitted source changes are excluded. Dry-run checks
+the routes without creating a worktree or making a model request. Inspect the
+saved result and patch before applying changes. Reviewer findings are advisory.
+Use `work resume CHECKPOINT_ID` for a saved handoff reviewer checkpoint.
 
 ## Check routes before dispatch
 
@@ -86,6 +108,10 @@ the profile.
 Add `--expected-version` or `--expected-sha256` to pin the launcher. A digest
 mismatch blocks launcher execution. Route listing reports invalid profiles
 individually and runs no launcher.
+
+Read [harness compatibility](references/harness-compatibility.md) before a
+harness upgrade. OpenCode major versions 2 and later are blocked. A valid
+OpenCode model catalog that omits the selected model also blocks dispatch.
 
 ## Run one OpenCode task
 

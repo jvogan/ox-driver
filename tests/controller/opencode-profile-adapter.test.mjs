@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { appendFile, chmod, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { appendFile, chmod, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 
@@ -13,13 +14,18 @@ import { trackedMkdtemp } from "./helpers/tracked-temp.mjs";
 
 const execFileAsync = promisify(execFile);
 
-async function launcherFixture({ delegates = false, databaseEvidence = false, nativeTask = true, childWritable = false, unboundText = false } = {}) {
+async function launcherFixture({ delegates = false, databaseEvidence = false, nativeTask = true, childWritable = false, unboundText = false, harnessVersion = "opencode 1.2.3", trackInvocations = false, modelCatalog } = {}) {
 	const root = await trackedMkdtemp(join(tmpdir(), "ox-driver-opencode-profile-launcher-"));
 	const launcher = join(root, "opencode");
 	await writeFile(launcher, `#!/usr/bin/env bash
 set -euo pipefail
+${trackInvocations ? `printf '%s\\n' "\${1:-}" >> '${root}/invocations.txt'` : ""}
 case "\${1:-}" in
-  --version) printf '%s\n' 'opencode 1.2.3'; exit 0 ;;
+  --version) printf '%s\n' '${harnessVersion}'; exit 0 ;;
+  models)
+    ${trackInvocations ? `printf '%s\\n' "\${2:-}" >> '${root}/catalog-provider.txt'` : ""}
+    ${modelCatalog === undefined ? "exit 22" : `printf '%s\\n' '${modelCatalog}'; exit 0`}
+    ;;
   doctor) printf '%s\n' 'generic route contract ready'; exit 0 ;;
   debug)
     [ "\${2:-}" = agent ] || exit 23
@@ -170,6 +176,82 @@ test("dispatches two explicit generic OpenCode profiles with exact independent r
 	assert.match(firstArgv, /--auto/);
 	assert.match(secondArgv, /--agent builder-b/);
 	assert.match(secondArgv, /--model provider-b\/model-b --variant high/);
+});
+
+test("OpenCode 1.19.5 retains its selected provider, model, and reasoning route", async () => {
+	const launcher = await launcherFixture({ harnessVersion: "opencode 1.19.5", trackInvocations: true, modelCatalog: "provider-a/model-a\nprovider-a/model-b" });
+	const route = profile("route-a", launcher, "provider-a", "model-a", "max", "builder-a");
+	route.runtime = { expectedVersion: "1.19.5" };
+	const report = await new OpenCodeAdapter({ profile: route }).doctor();
+	assert.equal(report.harnessVersion, "opencode 1.19.5");
+	assert.equal(report.probe.executionQualified, true);
+	assert.match(report.notices.join(" "), /model availability is verified/);
+	assert.equal(await readFile(join(dirname(launcher), "catalog-provider.txt"), "utf8"), "provider-a\n");
+	assert.deepEqual(report.configuredRoute, { provider: "provider-a", model: "model-a", reasoning: "max" });
+	const result = await runProfile(route);
+	assert.equal(result.receipt.status, "completed");
+	assert.deepEqual(result.receipt.configuredRoute, report.configuredRoute);
+	assert.match(await readFile(join(result.cwd, "argv.txt"), "utf8"), /--model provider-a\/model-a --variant max/);
+});
+
+test("OpenCode blocks an exact model absent from a valid catalog before optional probes or run", async () => {
+	const launcher = await launcherFixture({ modelCatalog: "provider-a/model-a-longer\nprovider-a/model-b", trackInvocations: true, databaseEvidence: true });
+	const route = profile("route-a", launcher, "provider-a", "model-a", "max", "builder-a");
+	const adapter = new OpenCodeAdapter({ profile: route });
+	const report = await adapter.doctor();
+	assert.equal(report.compatibility, "blocked");
+	assert.equal(report.available, false);
+	assert.equal(report.probe.modelCalls, 0);
+	assert.equal(report.probe.executionQualified, false);
+	assert.deepEqual(report.configuredRoute, { provider: "provider-a", model: "model-a", reasoning: "max" });
+	assert.match(report.notices.join(" "), /OpenCode model unavailable: provider-a\/model-a is absent/);
+	const cwd = await trackedMkdtemp("ox-opencode-model-block-");
+	const input = spec(cwd, route.id, "builder-a");
+	assert.ok((await adapter.preflight(input, report)).some((issue) => issue.code === "OPENCODE_MODEL_UNAVAILABLE"));
+	await assert.rejects(adapter.run(input, { doctor: report }), /OpenCode model unavailable/);
+	assert.deepEqual((await readFile(join(dirname(launcher), "invocations.txt"), "utf8")).trim().split("\n"), ["--version", "models"]);
+});
+
+test("OpenCode preserves a selected route when its catalog is unavailable, empty, or malformed", async () => {
+	for (const modelCatalog of [undefined, "", "catalog temporarily unavailable", "provider-a/model-b\nwarning: incomplete", "other-provider/model-b"]) {
+		const launcher = await launcherFixture({ modelCatalog, trackInvocations: true });
+		const route = profile("route-a", launcher, "provider-a", "model-a", "max", "builder-a");
+		const report = await new OpenCodeAdapter({ profile: route }).doctor();
+		assert.equal(report.available, true);
+		assert.equal(report.probe.modelCalls, 0);
+		assert.equal(report.probe.executionQualified, true);
+		assert.deepEqual(report.configuredRoute, { provider: "provider-a", model: "model-a", reasoning: "max" });
+		assert.match(report.notices.join(" "), /model availability is unverified/);
+		const result = await runProfile(route);
+		assert.equal(result.receipt.status, "completed");
+		assert.deepEqual(result.receipt.configuredRoute, report.configuredRoute);
+		assert.match(await readFile(join(result.cwd, "argv.txt"), "utf8"), /--model provider-a\/model-a --variant max/);
+	}
+});
+
+test("OpenCode major 2 and later stay blocked before optional probes or dispatch despite exact pins", async () => {
+	for (const harnessVersion of ["opencode 2.3.0", "2.3.0", "OpenCode v2.3.0", "opencode/3.0.0"]) {
+		const launcher = await launcherFixture({ harnessVersion, trackInvocations: true, databaseEvidence: true });
+		const route = profile("route-a", launcher, "provider-a", "model-a", "max", "builder-a");
+		route.runtime = { expectedVersion: harnessVersion, expectedSha256: createHash("sha256").update(await readFile(launcher)).digest("hex") };
+		const adapter = new OpenCodeAdapter({ profile: route });
+		const report = await adapter.doctor();
+		assert.equal(report.adapterId, "opencode-v2");
+		assert.equal(report.available, false);
+		assert.equal(report.compatibility, "blocked");
+		assert.equal(report.probe.modelCalls, 0);
+		assert.equal(report.probe.executionQualified, false);
+		assert.equal(report.capabilities["agents.children"], undefined);
+		assert.equal(report.capabilities["agents.receipts"], undefined);
+		assert.deepEqual(report.configuredRoute, { provider: "provider-a", model: "model-a", reasoning: "max" });
+		assert.match(report.notices.join(" "), /major version 2 or later is not qualified/);
+		assert.match(report.notices.join(" "), /adapter contract version, not OpenCode 2 compatibility/);
+		const cwd = await trackedMkdtemp("ox-opencode-version-block-");
+		const input = spec(cwd, route.id, "builder-a");
+		assert.ok((await adapter.preflight(input, report)).some((issue) => issue.code === "OPENCODE_CONFIGURED_ROUTE_REQUIRED"));
+		await assert.rejects(adapter.run(input, { doctor: report }), /major version 2 or later is not qualified/);
+		assert.deepEqual((await readFile(join(dirname(launcher), "invocations.txt"), "utf8")).trim().split("\n"), ["--version"]);
+	}
 });
 
 test("rejects wrong profile boundaries and leaves launcher-derived routes unqualified", async () => {

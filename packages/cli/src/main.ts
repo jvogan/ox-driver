@@ -7,8 +7,9 @@ import { validateRunSpec } from "@ox-driver/core";
 import { runHandoff } from "./handoff.js";
 import { runOmpReview } from "./omp-review.js";
 import { createController, createStateController, doctorHarnesses, handoffRuntime } from "./runtime.js";
+import { runWorkCommand, terminalText, workUsage } from "./work-cli.js";
 
-const usage = `Usage:
+const usage = `${workUsage}\n\nAdvanced commands:
   ox-driver validate <run-spec.json>
   ox-driver doctor [harness|--all]
   ox-driver preflight <run-spec.json>
@@ -64,6 +65,8 @@ async function readJson(path: string): Promise<unknown> {
 }
 
 async function main(argv: string[]): Promise<number> {
+	const workExitCode = await runWorkCommand(argv);
+	if (workExitCode !== undefined) return workExitCode;
 	if (argv[0] === "omp-review") {
 		const result = await runOmpReview(argv.slice(1), {
 			createController: async (spec) => (await createController(spec)).controller,
@@ -168,7 +171,7 @@ main(process.argv.slice(2)).then(
 		process.exitCode = code;
 	},
 	(error: unknown) => {
-		process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+		process.stderr.write(`${terminalText(error instanceof Error ? error.message : String(error))}\n`);
 		process.exitCode = 1;
 	},
 );
